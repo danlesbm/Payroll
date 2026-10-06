@@ -1,0 +1,31 @@
+# Chỉ dùng để chạy thử độc lập. Trên VPS đang có stack chung (Caddy + Postgres) thì KHÔNG chạy file này
+# mà thay thư mục app và build lại service `payroll` như cũ (xem README).
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: sbm-payroll-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sbm_payroll
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME}
+    volumes: [payroll_pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sbm_payroll"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports: ["127.0.0.1:5433:5432"]
+  app:
+    build: .
+    container_name: sbm-payroll
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-CHANGE_ME}@db:5432/sbm_payroll
+      PORT: 3102
+    depends_on:
+      db: { condition: service_healthy }
+    ports: ["127.0.0.1:3102:3102"]
+volumes:
+  payroll_pgdata:

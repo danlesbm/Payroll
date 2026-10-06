@@ -8,7 +8,7 @@ Chép thư mục `payroll/` đè lên (KHÔNG đụng `.env` / `docker-compose.y
 2. **Hoàn tác**: mỗi lần *Lưu thay đổi*, *Áp dụng cho người đã chọn* và *Tự nhận loại + lịch nghỉ* đều được chụp trạng thái trước đó. Nút **Hoàn tác lần này** (dưới thanh công cụ) trả đúng những người bị ảnh hưởng về như cũ (kể cả dấu 🔒), bấm tiếp để lùi dần (giữ 30 lần gần nhất).
 3. Chọn Loại = Quản lý thì ô Kíp / Trưởng ca của người đó tự mờ đi ngay khi chọn.
 4. API mới: `POST /api/employees-batch`, `GET/POST /api/employees-undo`.
-5. **Bảng hệ số gọn lại**: chữ nhỏ hơn, tiêu đề cột tự xuống dòng, các nút Nhập/Sửa/Lịch sử xếp dọc → vừa màn hình, không phải kéo ngang (nếu màn quá hẹp vẫn cuộn được, cột Họ tên và cột nút giữ nguyên).
+5. **Bảng hệ số gọn lại (cột hệ số chỉ rộng ~58px, cột tiền ~78px, bậc lương ~84px; file CSS/JS có số phiên `?v=619b` để trình duyệt không dùng bản cũ)**: chữ nhỏ hơn, tiêu đề cột tự xuống dòng, các nút Nhập/Sửa/Lịch sử xếp dọc → vừa màn hình, không phải kéo ngang (nếu màn quá hẹp vẫn cuộn được, cột Họ tên và cột nút giữ nguyên).
 6. **Chấm công — sao chép/dán**: quét chọn ô → Ctrl+C, chọn ô đích → Ctrl+V (Ctrl+X = cắt). Dán 1 ô vào vùng lớn = điền cả vùng; dán được từ Excel; hoàn tác bằng Ctrl+Z.
 
 ## Mới trong v6.18
