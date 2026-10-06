@@ -1,0 +1,9 @@
+{
+  "name": "sbm-payroll",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SBM Payroll - chấm công, ăn ca, bảng lương. Đăng nhập qua SSO Portal.",
+  "main": "src/server.js",
+  "scripts": { "start": "node src/server.js", "dev": "node --watch src/server.js", "test": "node --test" },
+  "dependencies": { "cookie-parser": "^1.4.7", "dotenv": "^16.4.7", "express": "^5.1.0", "pg": "^8.16.3" }
+}
