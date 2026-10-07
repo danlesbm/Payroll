@@ -73,7 +73,7 @@ router.delete('/codes/:code', api(async req => {
 }));
 crud(router, { path: 'codes', table: 'attendance_codes', pk: 'code', pkType: 'text', guard: needAtt, after: staleAll, fields: [
   { k: 'code', required: true, label: 'Ký hiệu' }, { k: 'name', required: true, label: 'Tên' }, { k: 'work_day', type: 'num', min: 0, max: 31, label: 'Công ngày' }, { k: 'work_night', type: 'num', min: 0, max: 31, label: 'Công đêm' }, { k: 'work_value', type: 'num', min: 0, max: 62, label: 'Tổng công' },
-  { k: 'color', label: 'Màu' }, { k: 'off_day_zero', type: 'bool' }, { k: 'is_ot', type: 'bool' }, { k: 'leave_value', type: 'num', min: 0, max: 4, label: 'Công nghỉ' }, { k: 'pay_scope', type: 'enum', values: ['both', 'salary', 'bonus'], label: 'Tính cho' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
+  { k: 'color', label: 'Màu' }, { k: 'off_day_zero', type: 'bool' }, { k: 'is_ot', type: 'bool' }, { k: 'leave_value', type: 'num', min: 0, max: 4, label: 'Công nghỉ' }, { k: 'pay_scope', type: 'enum', values: ['both', 'salary', 'bonus', 'none'], label: 'Tính cho' }, { k: 'meal_qty', type: 'num', min: 0, max: 10, label: 'Suất ăn (bảng chấm ăn ca riêng)' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
 crud(router, { path: 'meal-types', table: 'meal_types', guard: needAtt, after: staleAll, fields: [{ k: 'is_wait', type: 'bool' }, 
   { k: 'code', required: true, label: 'Mã' }, { k: 'name', required: true, label: 'Tên loại suất' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
 crud(router, { path: 'coefficient-types', table: 'coefficient_types', pk: 'code', pkType: 'text', guard: needHr, after: staleAll, fields: [

@@ -305,20 +305,27 @@ test('làm đêm / sửa chữa / lễ: tổng ngày = lễ% × (công + công c
   // ngày nghỉ bù trùng ngày nghỉ bị bỏ qua
   assert.deepEqual(W.premiumDays([{ day: 1, code: 'DEM' }], { ...o, skip: () => true }), { night: 0, extra: 0, holiday: 0 });
 });
-test('calcLine: làm đêm/thêm/lễ tách riêng, cộng vào lương và thưởng trước khi trừ', () => {
+test('calcLine: làm đêm/thêm/lễ tách riêng; mặc định chuyển cả phần theo hệ số lương sang bảng thưởng', () => {
   const base = { standardDays: 24, baseWage: 2000, coefTypes: [{ code: 'a', kind: 'insurance' }, { code: 'b', kind: 'bonus' }], coefs: { a: 2, b: 1 }, unitPrice: 1000, workDays: 24, minDays: 24 };
-  const r = c.calcLine({ ...base, premiumDays: { night: 1.5, extra: 0.35, holiday: 3 } });
-  const dayS = 4000 / 24, dayB = 1000 / 24;
+  const dayS = 4000 / 24, dayB = 1000 / 24, pd = { night: 1.5, extra: 0.35, holiday: 3 };
+  // cách cũ: phần theo hệ số lương nằm ở bảng lương
+  const r = c.calcLine({ ...base, premiumDays: pd, premiumInBonus: false });
   assert.equal(r.insuranceSalary, 4000); assert.equal(r.nightSalary, Math.round(dayS * 1.5)); assert.equal(r.extraSalary, Math.round(dayS * 0.35)); assert.equal(r.holidaySalary, Math.round(dayS * 3));
   assert.equal(r.nightBonus, Math.round(dayB * 1.5)); assert.equal(r.holidayBonus, Math.round(dayB * 3));
   assert.equal(r.salaryNet, 4000 + r.nightSalary + r.extraSalary + r.holidaySalary);
   assert.equal(r.net, r.salaryNet + r.bonusNet);
+  // mặc định: bảng lương dừng ở lương BH; thưởng làm đêm/thêm/lễ = phần lương + phần thưởng; thực lĩnh tổng không đổi
+  const m = c.calcLine({ ...base, premiumDays: pd });
+  assert.equal(m.nightSalary, 0); assert.equal(m.extraSalary, 0); assert.equal(m.holidaySalary, 0); assert.equal(m.salaryNet, 4000);
+  assert.equal(m.nightBonus, r.nightSalary + r.nightBonus); assert.equal(m.extraBonus, r.extraSalary + r.extraBonus); assert.equal(m.holidayBonus, r.holidaySalary + r.holidayBonus);
+  assert.equal(m.premSal.night, r.nightSalary); assert.equal(m.premBon.night, r.nightBonus);
+  assert.equal(m.net, r.net);
   // công vượt chuẩn tính vào "làm thêm", phần chính tối đa 1 lần công chuẩn
-  const o = c.calcLine({ ...base, workDays: 26 });
+  const o = c.calcLine({ ...base, workDays: 26, premiumInBonus: false });
   assert.equal(o.insuranceSalary, 4000); assert.equal(o.extraSalary, Math.round(dayS * 2)); assert.equal(o.otSalaryAmt, Math.round(dayS * 2));
   // khoản trừ % BH chỉ tính trên lương chính
   const d = c.calcLine({ ...base, premiumDays: { holiday: 3 }, deductionTypes: [{ code: 'bh', name: 'BH', calc: 'pct_insurance', value: 10 }] });
-  assert.equal(d.deduction, 400); assert.equal(d.salaryNet, 4000 + d.holidaySalary - 400);
+  assert.equal(d.deduction, 400); assert.equal(d.salaryNet, 4000 - 400);
 });
 
 test('hệ số hoàn thành kế hoạch nhân vào thưởng; hệ số "tổng" tự cộng các hệ số thưởng khác', () => {

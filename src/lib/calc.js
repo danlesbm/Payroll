@@ -108,7 +108,13 @@ function calcLine(i) {
   const nightSalary = round(rawDayS * num(pd.night)), nightBonus = round(rawDayB * num(pdB.night));
   const extraSalary = otSalaryAmt + round(rawDayS * num(pd.extra)), extraBonus = otBonusAmt + round(rawDayB * num(pdB.extra));
   const holidaySalary = round(rawDayS * num(pd.holiday)), holidayBonus = round(rawDayB * num(pdB.holiday));
-  const salaryPremium = nightSalary + extraSalary + holidaySalary, bonusPremium = nightBonus + extraBonus + holidayBonus;
+  // Tiền làm đêm / làm thêm / làm lễ phần theo hệ số lương: mặc định chuyển hết sang bảng thưởng (gộp vào cột thưởng làm đêm/thêm/lễ),
+  // bảng lương chỉ còn đến lương đóng bảo hiểm. premiumInBonus=false giữ cách cũ (phần theo hệ số lương nằm ở bảng lương).
+  const toBonus = i.premiumInBonus !== false;
+  const premSal = { night: nightSalary, extra: extraSalary, holiday: holidaySalary }, premBon = { night: nightBonus, extra: extraBonus, holiday: holidayBonus };
+  const outS = toBonus ? { night: 0, extra: 0, holiday: 0 } : premSal;
+  const outB = toBonus ? { night: nightBonus + nightSalary, extra: extraBonus + extraSalary, holiday: holidayBonus + holidaySalary } : premBon;
+  const salaryPremium = outS.night + outS.extra + outS.holiday, bonusPremium = outB.night + outB.extra + outB.holiday;
   const dailySalary = div > 0 ? Math.round(insCoef * num(i.baseWage) * lf / div) : 0, dailyBonus = div > 0 ? Math.round(bonusCoef * num(i.unitPrice) * lf * pf / div) : 0;   // đơn giá ngày = hệ số × đơn giá ÷ công chuẩn
   // Khoản thêm/trừ trong tháng: cố định, hoặc "hệ số × đơn giá" (hệ số lấy theo từng người)
   const extra = { bonus: 0, deduction: 0, bonus_deduction: 0 }, extraDetail = [];
@@ -132,7 +138,7 @@ function calcLine(i) {
   const salaryNet = insuranceSalary + salaryPremium + allowance - deduction;        // lương thực lĩnh (bảng lương)
   const bonusNet = bonus + bonusPremium - bonusDeduction;                           // thưởng thực nhận (bảng thưởng)
   const net = salaryNet + bonusNet + (i.mealInNet === false ? 0 : meal);
-  return { ratio: Math.round(ratio * 10000) / 10000, ratioBonus: Math.round(ratioBonus * 10000) / 10000, payStatus: pr.status, otDays: pr.otDays, rateDiv: div, minDays: minD, standardDays: std, dailySalary, dailyBonus, nightSalary, nightBonus, extraSalary, extraBonus, holidaySalary, holidayBonus, otSalaryAmt, otBonusAmt, salaryPremium, bonusPremium, premiumDays: { night: num(pd.night), extra: num(pd.extra), holiday: num(pd.holiday) }, laborFactor: lf, planFactor: pf, insuranceFull, safetyFactor: sf, safetyAllowance, safetyBase, insCoef, bonusCoef, insuranceSalary, bonusBase, bonus, allowance, meal,
+  return { ratio: Math.round(ratio * 10000) / 10000, ratioBonus: Math.round(ratioBonus * 10000) / 10000, payStatus: pr.status, otDays: pr.otDays, rateDiv: div, minDays: minD, standardDays: std, dailySalary, dailyBonus, nightSalary: outS.night, nightBonus: outB.night, extraSalary: outS.extra, extraBonus: outB.extra, holidaySalary: outS.holiday, holidayBonus: outB.holiday, premiumInBonus: toBonus, premSal, premBon, otSalaryAmt, otBonusAmt, salaryPremium, bonusPremium, premiumDays: { night: num(pd.night), extra: num(pd.extra), holiday: num(pd.holiday) }, laborFactor: lf, planFactor: pf, insuranceFull, safetyFactor: sf, safetyAllowance, safetyBase, insCoef, bonusCoef, insuranceSalary, bonusBase, bonus, allowance, meal,
     periodicDeduction: periodic, monthlyDeduction, monthlyBonus, bonusDeduction, salaryNet, bonusNet, deduction, net, deductionDetail, extraDetail };
 }
 module.exports = { bonusCoefOf, pickBaseWage, pickCodeMealPrice, pickCodeMealPriceAt, mealByCode, round, num, pickEffective, pickUnitPrice, pickMealRate, workDays, autoMealQty, mealAmount, calcLine };

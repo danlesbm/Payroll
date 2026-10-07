@@ -93,7 +93,7 @@ router.get('/:sheetId/:year/:month', api(async req => {
         WHERE pe.period_id=$1 ORDER BY ve.department_sort NULLS LAST, ve.department_name NULLS LAST, ve.emp_order, ve.sort_order, ve.full_name`, [p.id]),
       entries: await q(c, 'SELECT employee_id, day, code FROM attendance_entries WHERE period_id=$1', [p.id]),
       original: await q(c, 'SELECT employee_id, day, code FROM attendance_original WHERE period_id=$1', [p.id]),
-      meals: await q(c, 'SELECT employee_id, meal_type_id, day, quantity FROM meal_actual WHERE period_id=$1', [p.id]),
+      meals: await q(c, 'SELECT employee_id, meal_type_id, day, quantity, code FROM meal_actual WHERE period_id=$1', [p.id]),
       ratings: await q(c, 'SELECT employee_id, safety, labor FROM period_ratings WHERE period_id=$1', [p.id])
     };
   });
@@ -104,7 +104,8 @@ router.get('/:sheetId/:year/:month', api(async req => {
     for (const k of ['entries', 'original', 'meals', 'ratings']) data[k] = data[k].filter(r => ok.has(r.employee_id));
   }
   const toMap = list => { const m = {}; for (const e of list) (m[e.employee_id] ||= {})[e.day] = e.code; return m; };
-  const meal = {}; for (const e of data.meals) ((meal[e.meal_type_id] ||= {})[e.employee_id] ||= {})[e.day] = Number(e.quantity);
+  // Ô bảng chấm ăn ca: ký hiệu công (mới) hoặc số suất (dữ liệu cũ nhập số)
+  const meal = {}; for (const e of data.meals) ((meal[e.meal_type_id] ||= {})[e.employee_id] ||= {})[e.day] = e.code || Number(e.quantity);
   const role = editorRole(p.status);
   const fullEdit = open && !!role && req.auth.can(role, ctx);
   const tkDepts = !fullEdit && open && role === 'timekeeper' ? req.auth.deptIds(['timekeeper']) : new Set();
@@ -123,7 +124,8 @@ router.get('/:sheetId/:year/:month', api(async req => {
     employees: data.employees, ratings: Object.fromEntries(data.ratings.map(r => [r.employee_id, { safety: r.safety || '', labor: r.labor || '' }])),
     laborGrades: await rows('SELECT grade, factor FROM labor_grades ORDER BY sort_order, grade'), safetyGrades: (await rows('SELECT grade FROM safety_grades ORDER BY sort_order, grade')).map(x => x.grade),
     entries: toMap(data.entries), original: data.original.length && p.status !== 'draft' ? toMap(data.original) : null, mealActual: meal,
-    codes: await rows('SELECT code, name, work_value, work_day, work_night, color, off_day_zero AS off_zero, is_ot, pay_scope, pct_kind FROM attendance_codes WHERE active ORDER BY sort_order, code'),
+    codes: await rows('SELECT code, name, work_value, work_day, work_night, color, off_day_zero AS off_zero, is_ot, pay_scope, pct_kind, meal_qty FROM attendance_codes WHERE active ORDER BY sort_order, code'),
+    mealQty: Object.fromEntries((await rows('SELECT code, meal_qty FROM attendance_codes')).map(r => [r.code, Number(r.meal_qty)])),
     mealTypes: await rows('SELECT id, code, name, is_wait FROM meal_types WHERE active ORDER BY sort_order, name'),
     canEdit, editRole: role, actions,
     nextStep: ({ pending_l1: 'Cấp 1 có thể sửa công/xếp loại rồi bấm "Cấp 1 duyệt, trình cấp 2" (mọi chỉnh sửa được lưu kèm).', pending_l2: 'Cấp 2 có thể sửa công và chạy lương nháp ở trang Bảng lương; xong bấm "Cấp 2 chốt, trình cấp 3" ở trang Bảng lương.', pending_l3: 'Cấp 3 có thể sửa công; xong bấm "Cấp 3 chốt, trình Giám đốc" ở trang Bảng lương.', pending_dir: 'Đang chờ Giám đốc khoá ở trang Bảng lương. Không ai sửa được.' })[p.status] || '' };
@@ -215,21 +217,25 @@ router.post('/:periodId/meal-cells', api(async req => {
     const roster = await editableRoster(c, p, depts);
     const mt = (await q(c, 'SELECT is_wait FROM meal_types WHERE id=$1 AND active', [mealTypeId]))[0]; if (!mt) bad('Loại suất ăn không tồn tại hoặc đã ngừng dùng');
     const modeOf = new Map((await q(c, `SELECT ve.id, (SELECT d.meal_mode FROM departments d WHERE d.id=ve.department_id) AS m FROM period_employees pe JOIN v_employees ve ON ve.id=pe.employee_id WHERE pe.period_id=$1`, [p.id])).map(r => [r.id, r.m || 'auto']));
-    const cur = new Map((await q(c, 'SELECT employee_id, day, quantity FROM meal_actual WHERE period_id=$1 AND meal_type_id=$2', [p.id, mealTypeId])).map(r => [r.employee_id + ':' + r.day, Number(r.quantity)]));
+    // Mỗi ô: ký hiệu công (code) hoặc số suất (qty, dữ liệu cũ). Ký hiệu được tính số suất theo cột "Suất ăn" của ký hiệu (Cấu hình › Ký hiệu công)
+    const cur = new Map((await q(c, 'SELECT employee_id, day, quantity, code FROM meal_actual WHERE period_id=$1 AND meal_type_id=$2', [p.id, mealTypeId])).map(r => [r.employee_id + ':' + r.day, r.code || Number(r.quantity)]));
+    const codeOk = new Set((await q(c, 'SELECT code FROM attendance_codes WHERE active')).map(r => r.code));
     const uid = req.auth.user.id; let changed = 0;
     for (const ch of changes) {
-      const day = Number(ch.day); const qty = ch.qty === null || ch.qty === '' || ch.qty === undefined ? 0 : Number(ch.qty);
+      const day = Number(ch.day), code = typeof ch.code === 'string' ? ch.code.trim() : '';
+      const qty = code ? 0 : ch.qty === null || ch.qty === '' || ch.qty === undefined ? 0 : Number(ch.qty);
       if (!roster.has(ch.employeeId)) bad('Có nhân sự không thuộc bảng chấm công này hoặc ngoài bộ phận bạn được phân quyền chấm');
       if (!Number.isInteger(day) || day < 1 || day > max) bad(`Ngày ${ch.day} không hợp lệ`);
+      if (code && !codeOk.has(code)) bad(`Ký hiệu "${code}" không tồn tại hoặc đã ngừng dùng`);
       if (!Number.isFinite(qty) || qty < 0 || qty > 10) bad('Số suất ăn phải từ 0 đến 10');
       const md = modeOf.get(ch.employeeId); if (!(md === 'actual' && !mt.is_wait) && !(md === 'auto_wait' && mt.is_wait)) bad('Bộ phận của người này không chấm ăn ca theo bảng này (xem kiểu ăn ca ở Quản trị › Tổ chức & liên kết SSO)');
-      const old = cur.get(ch.employeeId + ':' + day) || 0;
-      if (qty === old) continue;
-      if (qty === 0) await c.query('DELETE FROM meal_actual WHERE period_id=$1 AND employee_id=$2 AND meal_type_id=$3 AND day=$4', [p.id, ch.employeeId, mealTypeId, day]);
-      else await c.query(`INSERT INTO meal_actual(period_id, employee_id, meal_type_id, day, quantity) VALUES($1,$2,$3,$4,$5)
-        ON CONFLICT (period_id, employee_id, meal_type_id, day) DO UPDATE SET quantity=EXCLUDED.quantity`, [p.id, ch.employeeId, mealTypeId, day, qty]);
+      const old = cur.get(ch.employeeId + ':' + day) || 0, nv = code || qty;
+      if (nv === old) continue;
+      if (!nv) await c.query('DELETE FROM meal_actual WHERE period_id=$1 AND employee_id=$2 AND meal_type_id=$3 AND day=$4', [p.id, ch.employeeId, mealTypeId, day]);
+      else await c.query(`INSERT INTO meal_actual(period_id, employee_id, meal_type_id, day, quantity, code) VALUES($1,$2,$3,$4,$5,$6)
+        ON CONFLICT (period_id, employee_id, meal_type_id, day) DO UPDATE SET quantity=EXCLUDED.quantity, code=EXCLUDED.code`, [p.id, ch.employeeId, mealTypeId, day, qty, code || null]);
       await c.query(`INSERT INTO attendance_changes(period_id, employee_id, day, field, old_value, new_value, stage, changed_by) VALUES($1,$2,$3,'meal',$4,$5,$6,$7)`,
-        [p.id, ch.employeeId, day, String(old), String(qty), p.status, uid]);
+        [p.id, ch.employeeId, day, old ? String(old) : '', nv ? String(nv) : '', p.status, uid]);
       changed++;
     }
     if (changed) await autoCalc(c, p.sheet_id, p.year, p.month, uid);

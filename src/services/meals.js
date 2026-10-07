@@ -11,7 +11,7 @@ async function mealReport(c, groupId, year, month) {
           ORDER BY ve.pay_department_sort NULLS LAST, ve.pay_department_name, ve.emp_order, ve.sort_order, ve.full_name`, [groupId, year, month]),
     q(c, `SELECT ae.employee_id, ae.code FROM attendance_entries ae JOIN periods p ON p.id=ae.period_id JOIN sheets s ON s.id=p.sheet_id
           WHERE s.group_id=$1 AND p.year=$2 AND p.month=$3 `, [groupId, year, month]),
-    q(c, `SELECT ma.employee_id, ma.meal_type_id, SUM(ma.quantity) AS qty FROM meal_actual ma JOIN periods p ON p.id=ma.period_id JOIN sheets s ON s.id=p.sheet_id
+    q(c, `SELECT ma.employee_id, ma.meal_type_id, SUM(CASE WHEN ma.code IS NOT NULL THEN COALESCE(ac.meal_qty, 0) ELSE ma.quantity END) AS qty FROM meal_actual ma LEFT JOIN attendance_codes ac ON ac.code=ma.code JOIN periods p ON p.id=ma.period_id JOIN sheets s ON s.id=p.sheet_id
           WHERE s.group_id=$1 AND p.year=$2 AND p.month=$3 GROUP BY ma.employee_id, ma.meal_type_id`, [groupId, year, month]),
     q(c, 'SELECT code, group_id, amount, effective_from, id FROM code_meal_prices WHERE group_id IS NULL'),
     q(c, 'SELECT * FROM meal_rates WHERE effective_from <= $1', [end]),

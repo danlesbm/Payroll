@@ -258,7 +258,7 @@ async function attendanceXlsx(c, sheetIds, year, month) {
     const holders = await safetyHolders(c, emps.map(e => e.id), monthEnd(year, month));
     const extraCols = [...(sh.use_safety || holders.size ? [['An toàn', 'safety']] : []), ...(sh.use_labor ? [['Xếp loại', 'labor']] : [])];
     const ent = {}; for (const e of await q(c, 'SELECT employee_id, day, code FROM attendance_entries WHERE period_id=$1', [p.id])) (ent[e.employee_id] ||= {})[e.day] = e.code;
-    const work = Object.fromEntries((await q(c, 'SELECT code, work_value, work_day, work_night, off_day_zero FROM attendance_codes')).map(r => [r.code, r]));
+    const work = Object.fromEntries((await q(c, 'SELECT code, work_value, work_day, work_night, off_day_zero, pay_scope FROM attendance_codes')).map(r => [r.code, r]));
     const ws = wb.sheet(sh.name, { landscape: true }); made++;
     const nc = 3 + days + 2 + extraCols.length, dcol = d => 3 + d;
     ws.col(1, 5); ws.col(2, 24); ws.col(3, 12); for (let d = 1; d <= days; d++) ws.col(dcol(d), 4.3); for (let k = 0; k < 2 + extraCols.length; k++) ws.col(nc - 1 - k, 8);
@@ -286,7 +286,7 @@ async function attendanceXlsx(c, sheetIds, year, month) {
       ws.set(r, 1, ++k, { border: true, al: 'center' }); ws.set(r, 2, e.full_name, { border: true }); ws.set(r, 3, dispPositions(e.positions, sh.group_kind, st, e.title) || '', { border: true, wrap: true, sz: 10 });
       for (let d = 1; d <= days; d++) {
         const cd = ent[e.id]?.[d] || '', w = new Date(Date.UTC(year, month - 1, d)).getUTCDay();
-        if (cd && work[cd] && !(work[cd].off_day_zero && sc.offSet.has(d))) { dsum += n(work[cd].work_day); nsum += n(work[cd].work_night); }
+        if (cd && work[cd] && work[cd].pay_scope !== 'none' && !(work[cd].off_day_zero && sc.offSet.has(d))) { dsum += n(work[cd].work_day); nsum += n(work[cd].work_night); }
         ws.set(r, dcol(d), cd, { border: true, al: 'center', sz: 9, fill: sctx.holidays.has(`${year}-${pad(month)}-${pad(d)}`) ? 'FFE0B2' : sc.offSet.has(d) ? 'FFEDED' : undefined });
       }
       ws.set(r, cn - 1, dsum, { border: true, al: 'center', b: true }); ws.set(r, cn, nsum, { border: true, al: 'center', b: true });

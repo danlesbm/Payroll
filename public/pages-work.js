@@ -34,7 +34,7 @@ PAGES.attendance = async (me, root) => {
     // Ký hiệu nghỉ bù / nghỉ phép rơi vào ngày nghỉ hằng tuần hoặc ngày lễ không cộng công
     const cw = (e, day, k) => { const c = codeBy[val(e, day)]; return c && !(c.off_zero && isOff(e, day)) ? Number(c[k] || 0) : 0; };
     // Phân loại công để hiển thị (chỉ trên phần mềm, file Excel xuất ra giữ nguyên): làm thêm (LT…) tách riêng, không nằm trong công thường
-    const cat = c => !c ? '' : c.is_ot ? 'ot' : c.off_zero ? 'leave' : c.pct_kind === 'extra' ? 'sc' : 'work';
+    const cat = c => !c || c.pay_scope === 'none' ? '' : c.is_ot ? 'ot' : c.off_zero ? 'leave' : c.pct_kind === 'extra' ? 'sc' : 'work';
     const bucket = (e, k) => days.reduce((s, day) => { const c = codeBy[val(e, day)]; if (!c || (c.off_zero && isOff(e, day))) return s; const t = cat(c), v = Number(c.work_value || 0);
       if (k === 'day') return s + (t === 'work' ? Number(c.work_day || 0) : 0); if (k === 'night') return s + (t === 'work' ? Number(c.work_night || 0) : 0);
       if (k === 'sc') return s + (t === 'sc' ? v : 0); if (k === 'leave') return s + (t === 'leave' ? v : 0); if (k === 'ot') return s + (t === 'ot' ? v : 0); return s; }, 0);
@@ -245,34 +245,54 @@ PAGES.attendance = async (me, root) => {
     async function saveAll() {
       if (dirty.size) { await POST(`/api/attendance/${d.period.id}/cells`, { changes: [...dirty].map(([k, code]) => { const [employeeId, day] = k.split(':'); return { employeeId, day: +day, code }; }) }); }
       if (mealDirty.size) {
-        const byT = new Map(); for (const [k, qty] of mealDirty) { const [t, rest] = k.split('|'), [employeeId, day] = rest.split(':'); (byT.get(t) || byT.set(t, []).get(t)).push({ employeeId, day: +day, qty }); }
+        const byT = new Map(); for (const [k, qty] of mealDirty) { const [t, rest] = k.split('|'), [employeeId, day] = rest.split(':'); (byT.get(t) || byT.set(t, []).get(t)).push(typeof qty === 'string' ? { employeeId, day: +day, code: qty, qty: 0 } : { employeeId, day: +day, qty }); }
         for (const [mealTypeId, changes] of byT) await POST(`/api/attendance/${d.period.id}/meal-cells`, { mealTypeId, changes });
       }
       if (rateDirty.size) { await POST(`/api/attendance/${d.period.id}/ratings`, { changes: [...rateDirty].map(([employeeId, o]) => ({ employeeId, ...o })) }); }
       dirty.clear(); mealDirty.clear(); rateDirty.clear(); toast('Đã lưu');
     }
     // Bảng chấm ăn ca riêng (Kiểu 2) / ăn chờ ca (Kiểu 3): chỉ hiện cho người thuộc bộ phận được cài kiểu đó (Quản trị › Tổ chức & liên kết SSO)
-    const mealSel = {};
+    // Chấm bằng ký hiệu công như bảng chấm công; mỗi ký hiệu = số suất ở cột "Suất ăn" (Cấu hình › Ký hiệu công). Ô số cũ (dữ liệu trước đây) vẫn giữ và tính.
+    const mealSel = {}, mealCur = {}; let mealPaint = null;
+    document.addEventListener('mouseup', () => { mealPaint = null; }, { once: false });
     function mealGrid() {
       const box = $('#mealgrid'); if (!box) return;
       const act = d.employees.filter(e => e.meal_mode === 'actual'), wait = d.employees.filter(e => e.meal_mode === 'auto_wait');
       const secs = [];
-      if (act.length) secs.push({ key: 'act', title: 'Bảng chấm ăn ca riêng (Kiểu 2)', hint: 'Bộ phận này tính tiền ăn theo số suất nhập ở đây (không tính theo ký hiệu công).', emps: act, types: d.mealTypes.filter(t => !t.is_wait) });
-      if (wait.length) secs.push({ key: 'wait', title: 'Bảng chấm ăn chờ ca (Kiểu 3)', hint: 'Ngoài ăn ca tự động theo ký hiệu công, bộ phận này được thêm tiền ăn chờ ca theo số suất nhập ở đây.', emps: wait, types: d.mealTypes.filter(t => t.is_wait) });
-      const mk = (t, e, day) => `${t}|${e}:${day}`, val = (t, e, day) => mealDirty.has(mk(t, e, day)) ? mealDirty.get(mk(t, e, day)) : Number(d.mealActual?.[t]?.[e]?.[day] || 0);
+      if (act.length) secs.push({ key: 'act', title: 'Bảng chấm ăn ca riêng (Kiểu 2)', hint: 'Bộ phận này tính tiền ăn theo bảng này (không tính theo bảng chấm công phía trên).', emps: act, types: d.mealTypes.filter(t => !t.is_wait) });
+      if (wait.length) secs.push({ key: 'wait', title: 'Bảng chấm ăn chờ ca (Kiểu 3)', hint: 'Ngoài ăn ca tự động theo ký hiệu công, bộ phận này được thêm tiền ăn chờ ca theo bảng này.', emps: wait, types: d.mealTypes.filter(t => t.is_wait) });
+      const mk = (t, e, day) => `${t}|${e}:${day}`, orig = (t, e, day) => d.mealActual?.[t]?.[e]?.[day] ?? '';
+      const raw = (t, e, day) => mealDirty.has(mk(t, e, day)) ? mealDirty.get(mk(t, e, day)) : orig(t, e, day);
+      const qtyOf = v => typeof v === 'number' ? v : v ? Number(d.mealQty?.[v] ?? codeBy[v]?.meal_qty ?? 0) : 0;
+      const tot = (t, e) => f2(days.reduce((a, x) => a + qtyOf(raw(t, e, x)), 0));
+      const cellHtml = (t, e, x) => { const v = raw(t, e, x), c = typeof v === 'string' ? codeBy[v] : null, q = qtyOf(v), ed = d.canEdit && edOf[e];
+        return `<td class="c ${holDay[x] ? 'hol' : isOff(e, x) ? 'sun' : ''} ${mealDirty.has(mk(t, e, x)) ? 'dirty' : ''} ${d.canEdit && !ed ? 'ro' : ''}" data-mt2="${t}" data-e="${e}" data-d="${x}" style="${c ? 'background:' + esc(c.color) + ';' : ''}cursor:${ed ? 'pointer' : 'default'}" title="${v === '' ? '' : typeof v === 'number' ? 'Số suất nhập tay (dữ liệu cũ): ' + v : esc(v) + ' = ' + q + ' suất'}">${typeof v === 'number' ? `<i class="muted">${v}</i>` : `${esc(v)}${v && !q ? '<sup style="color:#b91c1c">0</sup>' : ''}`}</td>`; };
       box.innerHTML = secs.map(sc => {
         const t = sc.types.find(x => x.id === mealSel[sc.key]) || sc.types[0]; if (!t) return `<div class="warnbox">Chưa có loại suất ăn cho "${esc(sc.title)}" — vào Quản trị › Cấu hình để thêm.</div>`; mealSel[sc.key] = t.id;
-        return `<div class="mealsec" data-k="${sc.key}" style="margin-top:14px"><div class="row"><h3 class="grow" style="margin:0">${esc(sc.title)}</h3>${sc.types.length > 1 ? `<select data-mt="${sc.key}">${sc.types.map(x => `<option value="${x.id}" ${x.id === t.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<span class="badge">${esc(t.name)}</span>`}</div>
-          <div class="muted small" style="margin:4px 0">${esc(sc.hint)} Nhập số suất mỗi ngày (0–10) rồi bấm <b>Lưu</b>.</div>
-          <div class="scroll attwrap" style="max-height:420px"><table class="att"><thead><tr><th>Họ tên</th>${days.map(x => `<th class="c ${holDay[x] ? 'hol' : wk(x) === 0 ? 'sun' : ''}" style="cursor:default">${x}<br><span class="muted">${WD[wk(x)]}</span></th>`).join('')}<th class="n">Tổng</th></tr></thead><tbody>${sc.emps.map(e => `<tr data-me="${e.id}"><td class="name"><b>${esc(e.full_name)}</b><div class="muted small">${esc(e.department_name || '')}</div></td>${days.map(x => `<td class="c" style="padding:0"><input type="number" min="0" max="10" step="0.5" data-t="${t.id}" data-e="${e.id}" data-d="${x}" style="width:32px;border:0;text-align:center;padding:2px;background:transparent" value="${val(t.id, e.id, x) || ''}" ${d.canEdit && edOf[e.id] ? '' : 'disabled'}></td>`).join('')}<td class="n" data-tot="${e.id}">${f2(days.reduce((a, x) => a + val(t.id, e.id, x), 0))}</td></tr>`).join('')}</tbody></table></div></div>`;
+        if (!(sc.key in mealCur)) mealCur[sc.key] = (d.codes.find(c => Number(c.meal_qty) > 0) || d.codes[0] || {}).code || '';
+        const cur = mealCur[sc.key];
+        return `<div class="mealsec" data-k="${sc.key}" style="margin-top:14px"><div class="row"><h3 class="grow" style="margin:0">${esc(sc.title)}</h3>${d.canEdit ? `<button class="btn sec sm" data-mcopy="${sc.key}" title="Điền các ô còn trống bằng ký hiệu ở bảng chấm công phía trên (chỉ ký hiệu có suất ăn > 0)">Chép từ bảng chấm công</button>` : ''}${sc.types.length > 1 ? `<select data-mt="${sc.key}">${sc.types.map(x => `<option value="${x.id}" ${x.id === t.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<span class="badge">${esc(t.name)}</span>`}</div>
+          <div class="muted small" style="margin:4px 0">${esc(sc.hint)} Chọn ký hiệu rồi bấm/kéo vào ô ngày như bảng chấm công, xong bấm <b>Lưu</b>. Mỗi ký hiệu tính theo số suất ở cột "Suất ăn" của ký hiệu (Quản trị › Cấu hình › Ký hiệu công); số nhỏ đỏ <sup style="color:#b91c1c">0</sup> = ký hiệu không tính suất ăn.</div>
+          ${d.canEdit ? `<div class="palette" style="margin:4px 0 6px">${d.codes.map(c => `<span class="chip ${c.code === cur ? 'on' : ''}" data-mc="${esc(c.code)}" data-k="${sc.key}" style="background:${esc(c.color)}${Number(c.meal_qty) > 0 ? '' : ';opacity:.55'}" title="${esc(c.name)} · ${Number(c.meal_qty) || 0} suất">${esc(c.code)}${Number(c.meal_qty) !== 1 ? `<sub>${Number(c.meal_qty) || 0}</sub>` : ''}</span>`).join('')}<span class="chip ${cur === '' ? 'on' : ''}" data-mc="" data-k="${sc.key}" style="background:#eee">✕ Xoá</span></div>` : ''}
+          <div class="scroll attwrap" style="max-height:420px"><table class="att"><thead><tr><th>Họ tên</th>${days.map(x => `<th class="c ${holDay[x] ? 'hol' : wk(x) === 0 ? 'sun' : ''}" style="cursor:default">${x}<br><span class="muted">${WD[wk(x)]}</span></th>`).join('')}<th class="n" title="Tổng số suất">Suất</th></tr></thead><tbody>${sc.emps.map(e => `<tr data-me="${e.id}"><td class="name"><b>${esc(e.full_name)}</b><div class="muted small">${esc(e.department_name || '')}</div></td>${days.map(x => cellHtml(t.id, e.id, x)).join('')}<td class="n" data-tot="${e.id}">${tot(t.id, e.id)}</td></tr>`).join('')}</tbody></table></div></div>`;
       }).join('');
+      const setCell = (t, e, x, v) => {
+        if (!(d.canEdit && edOf[e])) return;
+        const o = orig(t, e, x); if (v === o || (v === '' && o === '')) mealDirty.delete(mk(t, e, x)); else mealDirty.set(mk(t, e, x), v);
+        const td = box.querySelector(`td[data-mt2="${t}"][data-e="${e}"][data-d="${x}"]`); if (td) td.outerHTML = cellHtml(t, e, x);
+        const tt = box.querySelector(`[data-tot="${e}"]`); if (tt) tt.textContent = tot(t, e);
+      };
+      const secOfEl = el => el.closest('.mealsec')?.dataset.k;
       box.querySelectorAll('select[data-mt]').forEach(sl => sl.onchange = () => { mealSel[sl.dataset.mt] = sl.value; mealGrid(); });
-      box.querySelectorAll('input[data-t]').forEach(i => i.onchange = () => {
-        const q = i.value === '' ? 0 : Number(i.value); if (!Number.isFinite(q) || q < 0 || q > 10) { toast('Số suất phải từ 0 đến 10'); i.value = ''; return; }
-        const k = mk(i.dataset.t, i.dataset.e, i.dataset.d), orig = Number(d.mealActual?.[i.dataset.t]?.[i.dataset.e]?.[i.dataset.d] || 0);
-        if (q === orig) mealDirty.delete(k); else mealDirty.set(k, q);
-        const tot = box.querySelector(`[data-tot="${i.dataset.e}"]`); if (tot) tot.textContent = f2(days.reduce((a, x) => a + val(i.dataset.t, i.dataset.e, x), 0));
-        updateBar();
+      box.querySelectorAll('[data-mc]').forEach(ch => ch.onclick = () => { mealCur[ch.dataset.k] = ch.dataset.mc; mealGrid(); });
+      box.querySelectorAll('tbody').forEach(tb => {
+        tb.onmousedown = ev => { const td = ev.target.closest('td[data-mt2]'); if (!td || !d.canEdit) return; ev.preventDefault(); mealPaint = mealCur[secOfEl(td)] ?? ''; setCell(td.dataset.mt2, td.dataset.e, +td.dataset.d, mealPaint); updateBar(); };
+        tb.onmouseover = ev => { if (mealPaint === null) return; const td = ev.target.closest('td[data-mt2]'); if (td) { setCell(td.dataset.mt2, td.dataset.e, +td.dataset.d, mealPaint); updateBar(); } };
+      });
+      box.querySelectorAll('[data-mcopy]').forEach(b => b.onclick = () => {
+        const sc = secs.find(x => x.key === b.dataset.mcopy), t = mealSel[sc.key]; let n = 0;
+        for (const e of sc.emps) for (const x of days) { const code = val(e.id, x); if (raw(t, e.id, x) === '' && code && qtyOf(code) > 0) { setCell(t, e.id, x, code); n++; } }
+        updateBar(); toast(n ? `Đã điền ${n} ô từ bảng chấm công — bấm Lưu để ghi` : 'Không có ô trống nào để điền');
       });
     }
     async function history() {
@@ -344,7 +364,7 @@ PAGES.payroll = async (me, root) => {
       <tr><th colspan="2">LƯƠNG</th></tr>
       ${x.laborGrade ? row(`Xếp loại lao động <b>${esc(x.laborGrade)}</b> → nhân ×${x.laborFactor} vào lương & thưởng`, '') : ''}
       ${row(`Lương bảo hiểm = hệ số BH ${x.insCoef} × lương cơ sở ${money(x.baseWage)} × ${Math.min(x.ratio, 1)}${x.laborGrade ? ' × ' + x.laborFactor : ''}`, money(l.insurance_salary), 1)}
-      ${x.nightSalary || x.extraSalary || x.holidaySalary ? `${row(`Làm đêm <span class="muted small">(${x.premiumDays?.night || 0} ngày tương đương × ${money(x.dailySalary)})</span>`, money(x.nightSalary))}
+      ${!x.premiumInBonus && (x.nightSalary || x.extraSalary || x.holidaySalary) ? `${row(`Làm đêm <span class="muted small">(${x.premiumDays?.night || 0} ngày tương đương × ${money(x.dailySalary)})</span>`, money(x.nightSalary))}
       ${row(`Làm thêm / sửa chữa <span class="muted small">(${x.otDays || 0} công vượt chuẩn = ${money(x.otSalaryAmt)}; ${x.premiumDays?.extra || 0} ngày tương đương theo % ký hiệu)</span>`, money(x.extraSalary))}
       ${row(`Làm lễ, tết <span class="muted small">(${x.premiumDays?.holiday || 0} ngày tương đương theo % ngày lễ)</span>`, money(x.holidaySalary))}` : ''}
       ${row('Phụ cấp' + (x.safetyGrade ? ` <span class="muted small">(gồm phụ cấp an toàn xếp loại ${esc(x.safetyGrade)}: ×${x.safetyFactor})</span>` : ''), money(l.allowance))}
@@ -354,7 +374,9 @@ PAGES.payroll = async (me, root) => {
       <tr><th colspan="2">THƯỞNG</th></tr>
       ${row(`Thưởng theo hệ số = ${x.bonusCoef} × đơn giá ${money(x.unitPrice)} × ${Math.min(x.ratioBonus ?? x.ratio, 1)}${x.laborGrade ? ' × ' + x.laborFactor : ''}`, money(x.bonusBase))}
       
-      ${x.nightBonus || x.extraBonus || x.holidayBonus ? `${row('Thưởng làm đêm', money(x.nightBonus))}${row(`Thưởng làm thêm / sửa chữa <span class="muted small">(gồm ${money(x.otBonusAmt)} công vượt chuẩn)</span>`, money(x.extraBonus))}${row('Thưởng làm lễ, tết', money(x.holidayBonus))}` : ''}
+      ${x.nightBonus || x.extraBonus || x.holidayBonus ? (x.premiumInBonus ? (() => { const ps = x.premSal || {}, pb = x.premBon || {}, pd = x.premiumDays || {}, sp = k => `<span class="muted small">(theo hệ số lương ${money(ps[k])} + theo hệ số thưởng ${money(pb[k])}`;
+        return `${row(`Thưởng làm đêm ${sp('night')}; ${pd.night || 0} ngày tương đương)</span>`, money(x.nightBonus))}${row(`Thưởng làm thêm / sửa chữa ${sp('extra')}; ${x.otDays || 0} công vượt chuẩn = ${money((x.otSalaryAmt || 0) + (x.otBonusAmt || 0))}; ${pd.extra || 0} ngày tương đương theo % ký hiệu)</span>`, money(x.extraBonus))}${row(`Thưởng làm lễ, tết ${sp('holiday')}; ${pd.holiday || 0} ngày tương đương theo % ngày lễ)</span>`, money(x.holidayBonus))}`; })()
+        : `${row('Thưởng làm đêm', money(x.nightBonus))}${row(`Thưởng làm thêm / sửa chữa <span class="muted small">(gồm ${money(x.otBonusAmt)} công vượt chuẩn)</span>`, money(x.extraBonus))}${row('Thưởng làm lễ, tết', money(x.holidayBonus))}`) : ''}
       ${ex('bonus').map(e => row(`&nbsp;&nbsp;+ ${esc(e.label)} <span class="muted small">(${how(e)})</span>`, money(e.amount))).join('')}
       ${ex('bonus_deduction').map(e => row(`&nbsp;&nbsp;trừ ${esc(e.label)} <span class="muted small">(${how(e)})</span>`, '−' + money(e.amount))).join('')}
       ${row('Thưởng thực nhận', money(x.bonusNet ?? l.bonus), 1)}
