@@ -14,4 +14,5 @@ Chép thư mục `payroll/` đè lên (KHÔNG đụng `.env` / `docker-compose.y
 ## Mức lương đóng bảo hiểm gồm phụ cấp
 - Các khoản trừ "% lương bảo hiểm" (BHXH, BHYT, BHTN…) nay tính trên **lương bảo hiểm + phụ cấp** (cột Phụ cấp, gồm phụ cấp an toàn sau xếp loại an toàn).
 - Lương bảo hiểm trong mức đóng vẫn tối đa = hệ số BH × lương cơ sở (đủ công chuẩn), không gồm làm đêm/thêm/lễ, không nhân xếp loại lao động.
+- Tiền làm đêm / làm thêm / làm lễ phần theo lương cũng lấy căn cứ là **(lương bảo hiểm + phụ cấp) ÷ công chuẩn** cho mỗi ngày tương đương. Công vượt chuẩn cũng tính trên căn cứ này.
 - Phụ cấp vẫn nằm ở bảng lương (không vào bảng thưởng). Bảng lương nháp cần bấm "Tính lại".

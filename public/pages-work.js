@@ -383,7 +383,7 @@ PAGES.payroll = async (me, root) => {
       ${x.otWork ? row('Công làm thêm (ký hiệu LT, trả riêng theo %)', x.otWork) : ''}
       ${x.diffStd !== undefined ? row('Công thực tế − công tiêu chuẩn', (x.diffStd > 0 ? '+' : '') + x.diffStd) : ''}
       ${x.payStatus ? row('Kết quả so với chuẩn', ({ ot: `Tăng ca ${x.otDays} ngày (lương ×${x.otSalary}, thưởng ×${x.otBonus}) — tỷ lệ lương ${x.ratio}, thưởng ${x.ratioBonus}`, full: 'Đủ công — hưởng đủ', tolerance: 'Trong khoảng tối thiểu – chuẩn — hưởng đủ', short: `Thiếu công (dưới tối thiểu) — tính theo công thực tế, tỷ lệ ${x.ratio}`, none: '—' })[x.payStatus]) : row('Tỷ lệ công', x.ratio)}
-      ${x.dailySalary ? row('Đơn giá ngày: lương · thưởng <span class="muted small">(hệ số × đơn giá ÷ công chuẩn)</span>', `${money(x.dailySalary)} · ${money(x.dailyBonus)}`) : ''}
+      ${x.dailySalary ? row('Đơn giá ngày: lương · thưởng <span class="muted small">(lương: (lương BH + phụ cấp) ÷ công chuẩn; thưởng: hệ số × đơn giá ÷ công chuẩn) — căn cứ tính làm đêm/thêm/lễ</span>', `${money(x.dailySalary)} · ${money(x.dailyBonus)}`) : ''}
       <tr><th colspan="2">LƯƠNG</th></tr>
       ${x.laborGrade ? row(`Xếp loại lao động <b>${esc(x.laborGrade)}</b> → nhân ×${x.laborFactor} vào lương & thưởng`, '') : ''}
       ${row(`Lương bảo hiểm = hệ số BH ${x.insCoef} × lương cơ sở ${money(x.baseWage)} × ${Math.min(x.ratio, 1)}${x.laborGrade ? ' × ' + x.laborFactor : ''}`, money(l.insurance_salary), 1)}

@@ -375,3 +375,13 @@ test('Excel: số nguyên không có dấu chấm thừa; ăn ca theo kiểu b�
   const num = c.mealAmount({ a: 10, b: 5 }, { a: 40000, b: 20000 });
   assert.equal(num, 500000);
 });
+
+test('làm đêm / làm thêm / lễ phần lương tính trên (lương BH + phụ cấp)', () => {
+  const r = c.calcLine({ workDays: 26, standardDays: 26, baseWage: 1000000, unitPrice: 0, premiumInBonus: false,
+    coefTypes: [{ code: 'bh', kind: 'insurance' }, { code: 'an_toan', kind: 'amount' }], coefs: { bh: 3, an_toan: 200000 }, safetyCode: 'an_toan',
+    premiumDays: { night: 0.3, extra: 1, holiday: 2 } });
+  const day = 3200000 / 26;
+  assert.equal(r.dailySalary, Math.round(day)); assert.equal(r.premBaseSalary, 3200000);
+  assert.equal(r.nightSalary, Math.round(day * 0.3)); assert.equal(r.extraSalary, Math.round(day)); assert.equal(r.holidaySalary, Math.round(day * 2));
+  assert.equal(r.insuranceSalary, 3000000);   // lương BH trên bảng lương không đổi
+});
