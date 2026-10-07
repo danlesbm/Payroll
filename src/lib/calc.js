@@ -125,10 +125,12 @@ function calcLine(i) {
   }
   const monthlyBonus = round(i.monthlyBonus) + extra.bonus, monthlyDeduction = round(i.monthlyDeduction) + extra.deduction;
   const bonus = bonusBase + monthlyBonus;
+  // Mức lương đóng bảo hiểm = lương BH (tối đa hệ số × lương cơ sở, không gồm làm đêm/thêm/lễ) + phụ cấp (cột Phụ cấp, gồm phụ cấp an toàn)
+  const insuranceBase = insuranceFull + allowance;
   const deductionDetail = [];
   for (const d of i.deductionTypes || []) {
     if (d.active === false) continue;
-    const amt = d.calc === 'pct_insurance' ? round(insuranceFull * num(d.value) / 100) : round(d.value);
+    const amt = d.calc === 'pct_insurance' ? round(insuranceBase * num(d.value) / 100) : round(d.value);
     if (amt) deductionDetail.push({ code: d.code, name: d.name, amount: amt });
   }
   const periodic = deductionDetail.reduce((s, d) => s + d.amount, 0);
@@ -138,7 +140,7 @@ function calcLine(i) {
   const salaryNet = insuranceSalary + salaryPremium + allowance - deduction;        // lương thực lĩnh (bảng lương)
   const bonusNet = bonus + bonusPremium - bonusDeduction;                           // thưởng thực nhận (bảng thưởng)
   const net = salaryNet + bonusNet + (i.mealInNet === false ? 0 : meal);
-  return { ratio: Math.round(ratio * 10000) / 10000, ratioBonus: Math.round(ratioBonus * 10000) / 10000, payStatus: pr.status, otDays: pr.otDays, rateDiv: div, minDays: minD, standardDays: std, dailySalary, dailyBonus, nightSalary: outS.night, nightBonus: outB.night, extraSalary: outS.extra, extraBonus: outB.extra, holidaySalary: outS.holiday, holidayBonus: outB.holiday, premiumInBonus: toBonus, premSal, premBon, otSalaryAmt, otBonusAmt, salaryPremium, bonusPremium, premiumDays: { night: num(pd.night), extra: num(pd.extra), holiday: num(pd.holiday) }, laborFactor: lf, planFactor: pf, insuranceFull, safetyFactor: sf, safetyAllowance, safetyBase, insCoef, bonusCoef, insuranceSalary, bonusBase, bonus, allowance, meal,
+  return { ratio: Math.round(ratio * 10000) / 10000, ratioBonus: Math.round(ratioBonus * 10000) / 10000, payStatus: pr.status, otDays: pr.otDays, rateDiv: div, minDays: minD, standardDays: std, dailySalary, dailyBonus, nightSalary: outS.night, nightBonus: outB.night, extraSalary: outS.extra, extraBonus: outB.extra, holidaySalary: outS.holiday, holidayBonus: outB.holiday, premiumInBonus: toBonus, premSal, premBon, otSalaryAmt, otBonusAmt, salaryPremium, bonusPremium, premiumDays: { night: num(pd.night), extra: num(pd.extra), holiday: num(pd.holiday) }, laborFactor: lf, planFactor: pf, insuranceFull, insuranceBase, safetyFactor: sf, safetyAllowance, safetyBase, insCoef, bonusCoef, insuranceSalary, bonusBase, bonus, allowance, meal,
     periodicDeduction: periodic, monthlyDeduction, monthlyBonus, bonusDeduction, salaryNet, bonusNet, deduction, net, deductionDetail, extraDetail };
 }
 module.exports = { bonusCoefOf, pickBaseWage, pickCodeMealPrice, pickCodeMealPriceAt, mealByCode, round, num, pickEffective, pickUnitPrice, pickMealRate, workDays, autoMealQty, mealAmount, calcLine };

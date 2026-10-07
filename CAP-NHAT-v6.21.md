@@ -10,3 +10,8 @@ Chép thư mục `payroll/` đè lên (KHÔNG đụng `.env` / `docker-compose.y
 - *Công chuẩn*: quy tắc nghỉ hằng tuần / công tối thiểu có thể đặt riêng cho Hành chính; chưa đặt thì theo quy tắc chung.
 - Bảng chấm công / bảng in ở nhà máy: Hành chính đứng thành mục **Bộ phận hành chính**, sau Bộ phận quản lý, trước Công nhân vận hành.
 - Sau khi gán loại và nhập mức, bấm **Tính lại** các bảng lương nháp.
+
+## Mức lương đóng bảo hiểm gồm phụ cấp
+- Các khoản trừ "% lương bảo hiểm" (BHXH, BHYT, BHTN…) nay tính trên **lương bảo hiểm + phụ cấp** (cột Phụ cấp, gồm phụ cấp an toàn sau xếp loại an toàn).
+- Lương bảo hiểm trong mức đóng vẫn tối đa = hệ số BH × lương cơ sở (đủ công chuẩn), không gồm làm đêm/thêm/lễ, không nhân xếp loại lao động.
+- Phụ cấp vẫn nằm ở bảng lương (không vào bảng thưởng). Bảng lương nháp cần bấm "Tính lại".

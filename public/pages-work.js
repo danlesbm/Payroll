@@ -391,6 +391,7 @@ PAGES.payroll = async (me, root) => {
       ${row(`Làm thêm / sửa chữa <span class="muted small">(${x.otDays || 0} công vượt chuẩn = ${money(x.otSalaryAmt)}; ${x.premiumDays?.extra || 0} ngày tương đương theo % ký hiệu)</span>`, money(x.extraSalary))}
       ${row(`Làm lễ, tết <span class="muted small">(${x.premiumDays?.holiday || 0} ngày tương đương theo % ngày lễ)</span>`, money(x.holidaySalary))}` : ''}
       ${row('Phụ cấp' + (x.safetyGrade ? ` <span class="muted small">(gồm phụ cấp an toàn xếp loại ${esc(x.safetyGrade)}: ×${x.safetyFactor})</span>` : ''), money(l.allowance))}
+      ${x.insuranceBase !== undefined ? row(`Mức lương đóng bảo hiểm <span class="muted small">(lương BH chưa xếp loại ${money(x.insuranceFull)} + phụ cấp ${money(l.allowance)})</span>`, money(x.insuranceBase)) : ''}
       ${(x.deductions || []).map(t => row('&nbsp;&nbsp;trừ ' + esc(t.name), '−' + money(t.amount))).join('')}
       ${ex('deduction').map(e => row(`&nbsp;&nbsp;trừ ${esc(e.label)} <span class="muted small">(${how(e)})</span>`, '−' + money(e.amount))).join('')}
       ${row('Lương thực lĩnh', money(x.salaryNet ?? (l.insurance_salary + l.allowance - l.deduction)), 1)}

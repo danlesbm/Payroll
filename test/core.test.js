@@ -76,8 +76,9 @@ test('tính lương: BH + thưởng + phụ cấp + ăn − trừ, theo tỷ l�
   assert.equal(r.insuranceSalary, 3510000);
   assert.equal(r.bonus, 1100000);
   assert.equal(r.allowance, 200000);
-  assert.equal(r.periodicDeduction, 280800 + 52650);
-  assert.equal(r.deduction, 280800 + 52650 + 50000);
+  assert.equal(r.insuranceBase, 3710000);           // mức đóng BH = lương BH + phụ cấp
+  assert.equal(r.periodicDeduction, 296800 + 55650);
+  assert.equal(r.deduction, 296800 + 55650 + 50000);
   assert.equal(r.net, 3510000 + 1100000 + 200000 + 400000 - r.deduction);
   assert.equal(c.calcLine({ workDays: 26, standardDays: 26, baseWage: 1000, coefTypes, coefs: { bhxh: 1 }, mealAmount: 500, mealInNet: false }).net, 1000);
 });
@@ -140,16 +141,17 @@ test('làm sạch tên SSO', () => {
   assert.ok(isExcluded({ sso_name: 'Admin' }, pat)); assert.ok(isExcluded({ sso_name: 'NMTĐ Suối Sập 3' }, pat));
   assert.ok(!isExcluded({ sso_name: 'Lò Văn Thanh', email: 'thanh@x.vn' }, pat));
 });
-test('xếp loại lao động nhân vào lương & thưởng; an toàn B mất phụ cấp an toàn; % BH theo lương gốc', () => {
+test('xếp loại lao động nhân vào lương & thưởng; an toàn B mất phụ cấp an toàn; % BH theo lương gốc + phụ cấp', () => {
   const base = { workDays: 26, standardDays: 26, baseWage: 1000000, unitPrice: 100000,
     coefTypes: [{ code: 'bh', kind: 'insurance' }, { code: 'th', kind: 'bonus' }, { code: 'pc', kind: 'amount' }, { code: 'an_toan', kind: 'amount' }],
     coefs: { bh: 3, th: 2, pc: 50000, an_toan: 150000 }, safetyCode: 'an_toan', deductionTypes: [{ code: 'bhxh', name: 'BH', calc: 'pct_insurance', value: 10 }] };
   const a = c.calcLine({ ...base });
   assert.equal(a.insuranceSalary, 3000000); assert.equal(a.allowance, 200000);
+  assert.equal(a.periodicDeduction, 320000);     // 10% của (3.000.000 + phụ cấp 200.000)
   const b = c.calcLine({ ...base, laborFactor: 0.8, safetyFactor: 0 });
   assert.equal(b.insuranceSalary, 2400000); assert.equal(b.bonusBase, 160000);
   assert.equal(b.allowance, 50000);              // B: mất phụ cấp an toàn, phụ cấp khác giữ nguyên
-  assert.equal(b.periodicDeduction, 300000);     // 10% của 3.000.000 (chưa nhân xếp loại)
+  assert.equal(b.periodicDeduction, 305000);     // 10% của (3.000.000 chưa nhân xếp loại + phụ cấp còn lại 50.000)
   assert.equal(c.calcLine({ ...base, safetyFactor: 1 }).allowance, 200000);
 });
 
