@@ -4,7 +4,7 @@ const WD_MIN = { equal: 'Bằng công chuẩn', group_min: 'Kíp thấp nhất c
 const WD_DOW = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 let WD_YEAR = null;
 const wdMinText = r => (r.min_mode === 'group_min' ? 'Kíp thấp nhất của từng nhà máy' : r.min_mode === 'equal' ? 'Bằng công chuẩn' : r.min_mode === 'fixed' ? `Cố định ${Number(r.min_value)} ngày` : r.min_mode === 'minus' ? `Công chuẩn − ${Number(r.min_value)}` : `${Number(r.min_value)}% công chuẩn`) + (r.rate_basis === 'min' ? ' · đơn giá ngày ÷ công tối thiểu' : '');
-const wdScope = r => [r.department_name && `Phòng ${r.department_name}`, r.group_name && `Bảng lương ${r.group_name}`, r.employee_type && (r.employee_type === 'manager' ? 'Quản lý' : 'Công nhân')].filter(Boolean).join(' · ') || 'Toàn công ty';
+const wdScope = r => [r.department_name && `Phòng ${r.department_name}`, r.group_name && `Bảng lương ${r.group_name}`, r.employee_type && empType(r.employee_type)].filter(Boolean).join(' · ') || 'Toàn công ty';
 
 async function admWd(me, box, reload) {
   const now = new Date(); WD_YEAR = WD_YEAR || now.getFullYear();
@@ -35,7 +35,7 @@ async function admWd(me, box, reload) {
     const f = await ask(title, [
       { label: 'Bảng lương (để trống = mọi bảng)', type: 'select', options: sel(o.groups, '', '— Mọi bảng lương —'), value: r.group_id || '' },
       { label: 'Phòng (để trống = mọi phòng)', type: 'select', options: sel(o.departments, '', '— Mọi phòng —'), value: r.department_id || '' },
-      { label: 'Loại nhân sự', type: 'select', options: [{ v: '', t: '— Cả hai —' }, { v: 'manager', t: 'Quản lý' }, { v: 'worker', t: 'Công nhân' }], value: r.employee_type || '' },
+      { label: 'Loại nhân sự', type: 'select', options: [{ v: '', t: '— Tất cả —' }, ...EMP_TYPE_OPTS], value: r.employee_type || '' },
       { label: 'Nghỉ hằng tuần', type: 'select', options: Object.entries(WD_WEEKLY).map(([v, t]) => ({ v, t })), value: r.weekly_off || 'sun' },
       { label: 'Cách tính công tối thiểu', type: 'select', options: Object.entries(WD_MIN).map(([v, t]) => ({ v, t })), value: r.min_mode || 'equal' },
       { label: 'Giá trị N (số ngày cố định / số ngày trừ / % — bỏ qua nếu "Bằng công chuẩn")', type: 'number', step: '0.5', value: r.min_value ?? 0 },

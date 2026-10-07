@@ -6,6 +6,7 @@ const { bad, isUuid, str, api } = require('../lib/http');
 const { crud } = require('../lib/crud');
 const { markStale } = require('../services/payroll');
 const { applyExclusions } = require('../sso');
+const { isEmpType } = require('../lib/emptypes');
 const admin = req => req.auth.needAdmin();
 const needHr = req => { if (!req.auth.isAdmin && !req.auth.can('hr', {})) bad('Chỉ Admin hoặc người được phân quyền "Quản lý hệ số, đơn giá" mới được sửa', 403); };
 const needAtt = req => { if (!req.auth.isAdmin && !req.auth.can('cfg_att', {}) && !req.auth.can('hr', {})) bad('Chỉ Admin hoặc người được phân quyền "Cài đặt chấm công" mới được sửa', 403); };
@@ -139,7 +140,7 @@ router.delete('/meal-rates/:id', api(async req => { needAtt(req); if (!isUuid(re
 router.post('/base-wages', api(async req => {
   needHr(req);
   const value = Number(req.body?.value); if (!(value > 0)) bad('Lương cơ sở phải lớn hơn 0');
-  const et = req.body?.employeeType || null; if (et && !['manager', 'worker'].includes(et)) bad('Loại nhân sự không hợp lệ');
+  const et = req.body?.employeeType || null; if (et && !isEmpType(et)) bad('Loại nhân sự không hợp lệ');
   const r = await one(`INSERT INTO company_params(key, value, effective_from, note, created_by, employee_type) VALUES('base_wage',$1,$2,$3,$4,$5) RETURNING *`, [value, dateOk(req.body?.effectiveFrom), str(req.body?.note) || null, req.auth.user.id, et]);
   await staleAll(); await audit(req, 'base_wage.add', 'company_params', r.id, req.body); return r;
 }));
@@ -147,7 +148,7 @@ router.delete('/base-wages/:id', api(async req => { needHr(req); await pool.quer
 router.patch('/base-wages/:id', api(async req => {
   needHr(req);
   const id = Number(req.params.id) || 0, value = Number(req.body?.value); if (!(value > 0)) bad('Lương cơ sở phải lớn hơn 0');
-  const et = req.body?.employeeType || null; if (et && !['manager', 'worker'].includes(et)) bad('Loại nhân sự không hợp lệ');
+  const et = req.body?.employeeType || null; if (et && !isEmpType(et)) bad('Loại nhân sự không hợp lệ');
   const r = await one(`UPDATE company_params SET value=$2, effective_from=$3, note=$4, employee_type=$5 WHERE id=$1 AND key='base_wage' RETURNING *`, [id, value, dateOk(req.body?.effectiveFrom), str(req.body?.note) || null, et]);
   if (!r) bad('Không tìm thấy', 404);
   await staleAll(); await audit(req, 'base_wage.edit', 'company_params', id, req.body); return r;
@@ -159,7 +160,7 @@ router.patch('/unit-prices/:id', api(async req => {
   if (!(amount >= 0)) bad('Đơn giá không hợp lệ');
   if (b.groupId && !isUuid(b.groupId)) bad('Bảng lương không hợp lệ');
   if (b.departmentId && !isUuid(b.departmentId)) bad('Phòng không hợp lệ');
-  if (b.employeeType && !['manager', 'worker'].includes(b.employeeType)) bad('Loại nhân sự không hợp lệ');
+  if (b.employeeType && !isEmpType(b.employeeType)) bad('Loại nhân sự không hợp lệ');
   const r = await one(`UPDATE unit_prices SET group_id=$2, department_id=$3, employee_type=$4, amount=$5, effective_from=$6, note=$7 WHERE id=$1 RETURNING *`,
     [req.params.id, b.groupId || null, b.departmentId || null, b.employeeType || null, amount, dateOk(b.effectiveFrom), str(b.note) || null]);
   if (!r) bad('Không tìm thấy', 404);
@@ -171,7 +172,7 @@ router.post('/unit-prices', api(async req => {
   if (!(amount >= 0)) bad('Đơn giá không hợp lệ');
   if (b.groupId && !isUuid(b.groupId)) bad('Bảng lương không hợp lệ');
   if (b.departmentId && !isUuid(b.departmentId)) bad('Phòng không hợp lệ');
-  if (b.employeeType && !['manager', 'worker'].includes(b.employeeType)) bad('Loại nhân sự không hợp lệ');
+  if (b.employeeType && !isEmpType(b.employeeType)) bad('Loại nhân sự không hợp lệ');
   const r = await one(`INSERT INTO unit_prices(group_id, department_id, employee_type, amount, effective_from, note, created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
     [b.groupId || null, b.departmentId || null, b.employeeType || null, amount, dateOk(b.effectiveFrom), str(b.note) || null, req.auth.user.id]);
   await staleAll(); await audit(req, 'unit_price.add', 'unit_price', r.id, b); return r;

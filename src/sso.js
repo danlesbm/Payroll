@@ -46,8 +46,8 @@ async function resolveEmployees(client = pool) {
       pay_department_id = CASE WHEN e.excluded THEN NULL ELSE COALESCE(${first('sso_unit_ids')}, ${first('sso_dept_ids')}) END, updated_at=now()`);
 }
 // Tài khoản dùng chung (admin, email phòng ban…) khai báo ở Cấu hình › Loại trừ tài khoản: bị loại khỏi mọi bảng
-// Kíp / Trưởng ca chỉ áp dụng cho Công nhân; Quản lý không thuộc kíp nào
-const normalizeShifts = (client = pool) => client.query(`UPDATE employees SET shift_no=NULL, is_lead=false WHERE employee_type='manager' AND (shift_no IS NOT NULL OR is_lead)`);
+// Kíp / Trưởng ca chỉ áp dụng cho Công nhân; Quản lý / Hành chính không thuộc kíp nào
+const normalizeShifts = (client = pool) => client.query(`UPDATE employees SET shift_no=NULL, is_lead=false WHERE employee_type<>'worker' AND (shift_no IS NOT NULL OR is_lead)`);
 async function applyExclusions(client = pool) {
   const pat = parsePatterns((await client.query("SELECT value FROM settings WHERE key='exclude_patterns'")).rows[0]?.value);
   const all = (await client.query('SELECT id, sso_name, full_name, username, email FROM employees')).rows;

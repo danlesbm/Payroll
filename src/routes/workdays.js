@@ -5,6 +5,7 @@ const { audit } = require('../auth');
 const { bad, isUuid, str, api } = require('../lib/http');
 const W = require('../lib/workdays');
 const { markStale } = require('../services/payroll');
+const { isEmpType } = require('../lib/emptypes');
 
 const needHr = req => { if (!req.auth.isAdmin && !req.auth.can('hr', {})) bad('Chỉ Admin hoặc người được phân quyền "Quản lý hệ số, đơn giá" mới được sửa', 403); };
 const needAtt = req => { if (!req.auth.isAdmin && !req.auth.can('hr', {}) && !req.auth.can('cfg_att', {})) bad('Chỉ Admin hoặc người được phân quyền "Cài đặt chấm công" mới được sửa', 403); };
@@ -68,7 +69,7 @@ const RULE_SQL = `SELECT r.*, g.name AS group_name, d.name AS department_name FR
 function ruleBody(b) {
   const out = { group_id: b.groupId || null, department_id: b.departmentId || null, employee_type: b.employeeType || null };
   if (out.group_id && !isUuid(out.group_id)) bad('Bảng lương không hợp lệ'); if (out.department_id && !isUuid(out.department_id)) bad('Phòng không hợp lệ');
-  if (out.employee_type && !['manager', 'worker'].includes(out.employee_type)) bad('Loại nhân sự không hợp lệ');
+  if (out.employee_type && !isEmpType(out.employee_type)) bad('Loại nhân sự không hợp lệ');
   out.weekly_off = W.isWeekly(b.weeklyOff) ? b.weeklyOff : bad('Chọn lịch nghỉ hằng tuần');
   out.min_mode = ['equal', 'fixed', 'minus', 'pct', 'group_min'].includes(b.minMode) ? b.minMode : bad('Chọn cách tính công tối thiểu');
   const mv = b.minValue === '' || b.minValue == null ? 0 : Number(b.minValue);

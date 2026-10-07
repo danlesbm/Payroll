@@ -3,6 +3,7 @@ const { bad } = require('../lib/http');
 const { isReceived, STATUS_LABEL } = require('../lib/workflow');
 const { monthEnd } = require('../lib/dates');
 const calc = require('../lib/calc');
+const { empTypeName } = require('../lib/emptypes');
 const sched = require('./schedule');
 const { safetyHolders } = require('./safety');
 const workdaysLib = require('../lib/workdays');
@@ -63,7 +64,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
   const baseOf = {};
   for (const t of new Set(employees.map(e => e.employee_type))) {
     const row = calc.pickBaseWage(params, t, end);
-    if (!row) bad(`Chưa cấu hình "Lương cơ sở" cho ${t === 'manager' ? 'Quản lý' : 'Công nhân'} (Admin → Cấu hình → Lương cơ sở). Cần một mức có hiệu lực từ trước hoặc trong tháng này.`, 400);
+    if (!row) bad(`Chưa cấu hình "Lương cơ sở" cho ${empTypeName(t)} (Admin → Cấu hình → Lương cơ sở). Cần một mức có hiệu lực từ trước hoặc trong tháng này.`, 400);
     baseOf[t] = calc.num(row.value);
   }
   const ov = standardDays === undefined ? existing?.std_override : standardDays;

@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS employees (
   sso_dept_ids text[] NOT NULL DEFAULT '{}',
   mapped_department_id uuid REFERENCES departments(id) ON DELETE SET NULL,
   override_department_id uuid REFERENCES departments(id) ON DELETE SET NULL,
-  employee_type text NOT NULL DEFAULT 'worker' CHECK (employee_type IN ('manager','worker')),
+  employee_type text NOT NULL DEFAULT 'worker' CHECK (employee_type IN ('manager','admin','worker')),
   sso_status text NOT NULL DEFAULT 'active',
   payroll_active boolean NOT NULL DEFAULT true,
   sort_order int NOT NULL DEFAULT 0,
@@ -83,7 +83,7 @@ SELECT e.*, COALESCE(e.override_department_id, e.mapped_department_id) AS depart
        s.id AS sheet_id, s.name AS sheet_name, g.id AS group_id, g.name AS group_name, g.kind AS group_kind,
        COALESCE(e.pay_department_id, e.override_department_id, e.mapped_department_id) AS pay_dept_id,
        pd.name AS pay_department_name, dept_order(pd.id, pd.sort_order) AS pay_department_sort,
-       (CASE WHEN e.employee_type='manager' THEN 0 ELSE 1 END) * 1000000 + COALESCE(e.shift_no,0) * 10000 + (CASE WHEN e.is_lead THEN 0 ELSE 1 END) * 1000 + e.pos_rank AS emp_order,
+       (CASE e.employee_type WHEN 'manager' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END) * 1000000 + COALESCE(e.shift_no,0) * 10000 + (CASE WHEN e.is_lead THEN 0 ELSE 1 END) * 1000 + e.pos_rank AS emp_order,
        pg.id AS pay_group_id, pg.name AS pay_group_name
 FROM employees e
 LEFT JOIN departments d ON d.id = COALESCE(e.override_department_id, e.mapped_department_id)
@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS unit_prices (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   group_id uuid REFERENCES groups(id) ON DELETE CASCADE,
   department_id uuid REFERENCES departments(id) ON DELETE CASCADE,
-  employee_type text CHECK (employee_type IN ('manager','worker')),
+  employee_type text CHECK (employee_type IN ('manager','admin','worker')),
   amount numeric(14,2) NOT NULL, effective_from date NOT NULL, note text, created_by text, created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS deduction_types (
@@ -354,7 +354,7 @@ CREATE TABLE IF NOT EXISTS schedule_rules (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   group_id uuid REFERENCES groups(id) ON DELETE CASCADE,
   department_id uuid REFERENCES departments(id) ON DELETE CASCADE,
-  employee_type text CHECK (employee_type IN ('manager','worker')),
+  employee_type text CHECK (employee_type IN ('manager','admin','worker')),
   weekly_off text NOT NULL DEFAULT 'sun' CHECK (weekly_off IN ('sun','sat_sun')),
   min_mode text NOT NULL DEFAULT 'equal' CHECK (min_mode IN ('equal','fixed','minus','pct')),   -- công tối thiểu: = công chuẩn | số cố định | công chuẩn − N | N% công chuẩn
   min_value numeric(8,2) NOT NULL DEFAULT 0,
@@ -508,4 +508,13 @@ DO $$ BEGIN
     END IF;
     INSERT INTO settings(key,value,note) VALUES('v620_seed','1','Suất ăn của ký hiệu công (bảng chấm ăn ca riêng/chờ ca) lấy theo ký hiệu đang có tiền ăn ca');
   END IF;
+END $$;
+-- v6.21: thêm loại nhân sự "Hành chính" (admin) bên cạnh Quản lý / Công nhân — có lương cơ sở, đơn giá, quy tắc công chuẩn riêng
+DO $$ DECLARE t text; c text; BEGIN
+  FOREACH t IN ARRAY ARRAY['employees','unit_prices','schedule_rules'] LOOP
+    FOR c IN SELECT conname FROM pg_constraint WHERE conrelid=t::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%employee_type%' LOOP
+      EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', t, c);
+    END LOOP;
+    EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I CHECK (employee_type IN (''manager'',''admin'',''worker''))', t, t || '_employee_type_chk');
+  END LOOP;
 END $$;
