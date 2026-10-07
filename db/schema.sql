@@ -416,7 +416,7 @@ ALTER TABLE schedule_rules ADD CONSTRAINT schedule_rules_min_mode_check CHECK (m
 -- Ký hiệu công: tính cho lương / thưởng / cả hai; ký hiệu làm thêm (LT…) không tính vào công thường mà tính riêng
 ALTER TABLE attendance_codes ADD COLUMN IF NOT EXISTS pay_scope text NOT NULL DEFAULT 'both';
 ALTER TABLE attendance_codes DROP CONSTRAINT IF EXISTS attendance_codes_pay_scope_check;
-ALTER TABLE attendance_codes ADD CONSTRAINT attendance_codes_pay_scope_check CHECK (pay_scope IN ('both','salary','bonus'));
+ALTER TABLE attendance_codes ADD CONSTRAINT attendance_codes_pay_scope_check CHECK (pay_scope IN ('both','salary','bonus','none'));   -- v6.20: thêm 'none' (không tính lương)
 ALTER TABLE attendance_codes ADD COLUMN IF NOT EXISTS is_ot boolean NOT NULL DEFAULT false;
 ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS min_info jsonb;
 -- Cài đặt mẫu một lần theo mô tả của công ty (sửa được ở Cấu hình › Ký hiệu công và Công chuẩn)
@@ -495,8 +495,6 @@ CREATE TABLE IF NOT EXISTS employee_snapshots (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 -- v6.20: công không trả lương (pay_scope 'none') nhưng vẫn có thể tính ăn ca; bảng chấm ăn ca riêng / chờ ca chấm bằng ký hiệu công
-ALTER TABLE attendance_codes DROP CONSTRAINT IF EXISTS attendance_codes_pay_scope_check;
-ALTER TABLE attendance_codes ADD CONSTRAINT attendance_codes_pay_scope_check CHECK (pay_scope IN ('both','salary','bonus','none'));
 -- Số suất ăn khi ký hiệu được chấm ở bảng chấm ăn ca riêng (Kiểu 2) / ăn chờ ca (Kiểu 3); 0 = ký hiệu không tính suất ăn
 ALTER TABLE attendance_codes ADD COLUMN IF NOT EXISTS meal_qty numeric(5,2) NOT NULL DEFAULT 1;
 ALTER TABLE meal_actual ADD COLUMN IF NOT EXISTS code text REFERENCES attendance_codes(code) ON UPDATE CASCADE ON DELETE SET NULL;
