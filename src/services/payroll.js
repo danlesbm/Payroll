@@ -108,9 +108,9 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
     // Ký hiệu "nghỉ bù / nghỉ phép" rơi vào ngày nghỉ hằng tuần hoặc ngày lễ không cộng công (ngày đó vốn đã được nghỉ)
     // Ký hiệu làm thêm (LT…) không vào công thường mà trả riêng theo % của ký hiệu; ký hiệu "chỉ lương"/"chỉ thưởng" chỉ vào công tương ứng
     const keep = rawE.filter(x => !(offZero.has(x.code) && sc.offSet.has(x.day)));
-    // Ký hiệu "không tính lương" (pay_scope 'none'): không vào công lương/thưởng nào (vẫn có thể có tiền ăn ca theo ký hiệu)
-    const eff = keep.filter(x => !otSet.has(x.code) && scopeOf[x.code] !== 'none').map(x => x.code);
-    const effS = eff.filter(cd => scopeOf[cd] !== 'bonus'), effB = eff.filter(cd => scopeOf[cd] !== 'salary');
+    // Ký hiệu "không tính lương" (pay_scope 'none'): vẫn cộng vào ngày công hiển thị (eff, cột Công) nhưng không vào công tính lương/thưởng; ăn ca tính riêng theo ký hiệu
+    const eff = keep.filter(x => !otSet.has(x.code)).map(x => x.code);
+    const effS = eff.filter(cd => scopeOf[cd] !== 'bonus' && scopeOf[cd] !== 'none'), effB = eff.filter(cd => scopeOf[cd] !== 'salary' && scopeOf[cd] !== 'none');
     const wd = calc.workDays(effS, codeWork), wdB = calc.workDays(effB, codeWork), wTotal = calc.workDays(eff, codeWork), wDay = calc.workDays(eff, codeDay), wNight = calc.workDays(eff, codeNight);
     const zeroed = rawE.length - keep.length;
     const otCnt = keep.filter(x => otSet.has(x.code) && scopeOf[x.code] !== 'none').reduce((n, x) => n + calc.num(codeWork[x.code]), 0);

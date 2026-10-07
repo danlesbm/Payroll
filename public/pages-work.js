@@ -34,7 +34,7 @@ PAGES.attendance = async (me, root) => {
     // Ký hiệu nghỉ bù / nghỉ phép rơi vào ngày nghỉ hằng tuần hoặc ngày lễ không cộng công
     const cw = (e, day, k) => { const c = codeBy[val(e, day)]; return c && !(c.off_zero && isOff(e, day)) ? Number(c[k] || 0) : 0; };
     // Phân loại công để hiển thị (chỉ trên phần mềm, file Excel xuất ra giữ nguyên): làm thêm (LT…) tách riêng, không nằm trong công thường
-    const cat = c => !c || c.pay_scope === 'none' ? '' : c.is_ot ? 'ot' : c.off_zero ? 'leave' : c.pct_kind === 'extra' ? 'sc' : 'work';
+    const cat = c => !c ? '' : c.is_ot ? 'ot' : c.off_zero ? 'leave' : c.pct_kind === 'extra' ? 'sc' : 'work';
     const bucket = (e, k) => days.reduce((s, day) => { const c = codeBy[val(e, day)]; if (!c || (c.off_zero && isOff(e, day))) return s; const t = cat(c), v = Number(c.work_value || 0);
       if (k === 'day') return s + (t === 'work' ? Number(c.work_day || 0) : 0); if (k === 'night') return s + (t === 'work' ? Number(c.work_night || 0) : 0);
       if (k === 'sc') return s + (t === 'sc' ? v : 0); if (k === 'leave') return s + (t === 'leave' ? v : 0); if (k === 'ot') return s + (t === 'ot' ? v : 0); return s; }, 0);
