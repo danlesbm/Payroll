@@ -182,6 +182,17 @@ test('lương cơ sở: mức riêng theo loại nhân sự ưu tiên hơn mức
   assert.equal(c.pickBaseWage(rows, 'worker', '2026-07-31').value, 1900000);
   assert.equal(c.pickBaseWage(rows, 'worker', '2025-12-31'), null);
 });
+test('loại Hành chính (admin): lương cơ sở và đơn giá riêng, không có thì dùng mức chung', () => {
+  const base = [{ id: 1, value: 1800000, effective_from: '2026-01-01', employee_type: null }, { id: 2, value: 2300000, effective_from: '2026-09-01', employee_type: 'admin' }];
+  assert.equal(c.pickBaseWage(base, 'admin', '2026-08-31').value, 1800000);
+  assert.equal(c.pickBaseWage(base, 'admin', '2026-09-30').value, 2300000);
+  assert.equal(c.pickBaseWage(base, 'manager', '2026-09-30').value, 1800000);
+  const prices = [{ id: 1, employee_type: 'worker', amount: 2000000, effective_from: '2026-09-01' }, { id: 2, employee_type: 'admin', amount: 2200000, effective_from: '2026-09-01' }, { id: 3, employee_type: 'manager', amount: 2500000, effective_from: '2026-09-01' }];
+  assert.equal(c.pickUnitPrice(prices, { groupId: 'G', departmentId: 'D', employeeType: 'admin' }, '2026-09-30').amount, 2200000);
+  const { isEmpType, empTypeName } = require('../src/lib/emptypes');
+  assert.ok(isEmpType('admin') && !isEmpType('boss'));
+  assert.equal(empTypeName('admin'), 'Hành chính');
+});
 test('cấp 1 và Giám đốc tự suy từ chức vụ SSO', () => {
   const { derive } = require('../src/lib/autoroles');
   const r = (positions, extra = {}) => ({ sso_user_id: 'u', full_name: 'X', positions, dept_name: 'P', sheet_id: 'S1', sheet_name: 'Bảng', dept_has_head: false, ...extra });

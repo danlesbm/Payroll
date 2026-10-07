@@ -79,7 +79,7 @@ function table(ws, r0, cols, depts, opt = {}) {
   return r + 2;
 }
 // Nhà máy: tách mục "Bộ phận quản lý" và "Công nhân vận hành" (theo ca, trưởng ca đứng trước)
-const secOf = x => x.employee_type === 'manager' ? 'Bộ phận quản lý' : (x.shift_no ? `Công nhân vận hành — Kíp ${x.shift_no}` : 'Công nhân vận hành');
+const secOf = x => x.employee_type === 'manager' ? 'Bộ phận quản lý' : x.employee_type === 'admin' ? 'Bộ phận hành chính' : (x.shift_no ? `Công nhân vận hành — Kíp ${x.shift_no}` : 'Công nhân vận hành');
 function byDept(list, key = 'pay_department_name', plant = false) {
   const out = []; let cur = null;
   for (const x of list) {

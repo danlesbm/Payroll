@@ -6,6 +6,10 @@ const dt = d => d ? new Date(d).toLocaleString('vi-VN') : '';
 const ymd = d => d ? String(d).slice(0, 10) : '';
 const fmtDate = d => ymd(d).split('-').reverse().join('/');
 const STATUS = { draft: 'Đang chấm', pending_l1: 'Cấp 1 kiểm soát', pending_l2: 'Cấp 2 xử lý & chạy lương', adjusting: 'Cấp 2 xử lý & chạy lương', pending_l3: 'Cấp 3 kiểm soát', pending_dir: 'Chờ Giám đốc khoá', locked: 'Đã khoá (chính thức)', not_started: 'Chưa tạo', submitted: 'Cấp 3 kiểm soát', none: 'Chưa tính' };
+// Loại nhân sự
+const EMP_TYPE = { manager: 'Quản lý', admin: 'Hành chính', worker: 'Công nhân' };
+const empType = t => EMP_TYPE[t] || EMP_TYPE.worker;
+const EMP_TYPE_OPTS = [{ v: 'manager', t: 'Quản lý' }, { v: 'admin', t: 'Hành chính' }, { v: 'worker', t: 'Công nhân' }];
 const badge = s => `<span class="badge ${esc(s)}">${esc(STATUS[s] || s)}</span>`;
 
 // Token SSO: SSO mở app với ?token=...  -> cất vào sessionStorage rồi xoá khỏi URL

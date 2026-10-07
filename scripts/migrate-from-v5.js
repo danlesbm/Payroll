@@ -21,7 +21,7 @@ const MAP = { salary_coefficient: 'bhxh', duty_coefficient: 'chuc_vu', skill_coe
   }
   let m = 0;
   for (const e of (await pool.query('SELECT sso_user_id, employee_code, employee_type FROM public.employees')).rows) {
-    m += (await pool.query(`UPDATE ${SCHEMA}.employees SET employee_code=COALESCE($2, employee_code), employee_type=CASE WHEN $3 IN ('manager','worker') THEN $3 ELSE employee_type END WHERE sso_user_id=$1`, [e.sso_user_id, e.employee_code || null, e.employee_type || null])).rowCount;
+    m += (await pool.query(`UPDATE ${SCHEMA}.employees SET employee_code=COALESCE($2, employee_code), employee_type=CASE WHEN $3 IN ('manager','admin','worker') THEN $3 ELSE employee_type END WHERE sso_user_id=$1`, [e.sso_user_id, e.employee_code || null, e.employee_type || null])).rowCount;
   }
   console.log(`Đã chuyển ${n} bản ghi hệ số (bỏ qua ${miss} người chưa có bên mới), cập nhật ${m} nhân sự.`);
   await pool.end();

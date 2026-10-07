@@ -4,6 +4,7 @@ const { audit } = require('../auth');
 const { bad, isUuid, str, api, forbid } = require('../lib/http');
 const { ROLES, SCOPES_OF } = require('../lib/permissions');
 const { syncDirectory, normalizeShifts } = require('../sso');
+const { isEmpType } = require('../lib/emptypes');
 
 // Quản lý nhân sự: Admin hoặc người có quyền "people" (toàn hệ thống)
 const needPeople = req => { if (!req.auth.isAdmin && !req.auth.can('people', {})) forbid('Chỉ Admin hoặc người được phân quyền "Quản lý nhân sự" mới thực hiện được'); };
@@ -29,7 +30,7 @@ const SNAP_COLS = ['employee_code', 'employee_type', 'shift_no', 'is_lead', 'all
 function buildSets(b, p) {
   const sets = [], add = (col, v) => { p.push(v); sets.push(`${col}=$${p.length}`); };
   if ('employee_code' in b) add('employee_code', str(b.employee_code) || null);
-  if ('employee_type' in b) { if (!['manager', 'worker'].includes(b.employee_type)) bad('Loại nhân sự không hợp lệ'); add('employee_type', b.employee_type); }
+  if ('employee_type' in b) { if (!isEmpType(b.employee_type)) bad('Loại nhân sự không hợp lệ'); add('employee_type', b.employee_type); }
   if ('shift_no' in b) { const n = b.shift_no === '' || b.shift_no === null ? null : Math.trunc(Number(b.shift_no)); if (n !== null && !(n >= 1 && n <= 20)) bad('Kíp phải từ 1 đến 20'); add('shift_no', n); }
   if ('is_lead' in b) add('is_lead', b.is_lead === true || b.is_lead === 'true');
   if ('allowance_group_id' in b) { if (b.allowance_group_id && !isUuid(b.allowance_group_id)) bad('Nhóm phụ cấp không hợp lệ'); add('allowance_group_id', b.allowance_group_id || null); }
@@ -84,7 +85,7 @@ router.patch('/employees-bulk', api(async req => {
 router.post('/employees-autotype', api(async req => {
   needPeople(req);
   const dry = req.body?.dryRun === true, overwrite = req.body?.overwrite === true;
-  const T = `(CASE WHEN v.pos_rank <= 40 OR v.group_kind = 'office' THEN 'manager' ELSE 'worker' END)`, O = `(CASE WHEN v.pos_rank <= 40 OR v.group_kind = 'office' THEN 'sat_sun' ELSE 'sun' END)`;
+  const T = `(CASE WHEN v.employee_type = 'admin' THEN 'admin' WHEN v.pos_rank <= 40 OR v.group_kind = 'office' THEN 'manager' ELSE 'worker' END)`, O = `(CASE WHEN v.pos_rank <= 40 OR v.group_kind = 'office' THEN 'sat_sun' ELSE 'sun' END)`;
   const all = await rows(`SELECT v.id, v.full_name, v.positions, v.department_name, v.group_name, v.employee_type AS cur_type, v.weekly_off AS cur_off, v.type_locked, ${T} AS new_type, ${O} AS new_off
     FROM v_employees v WHERE v.sso_status='active' AND NOT v.excluded AND v.department_id IS NOT NULL ORDER BY v.group_name NULLS LAST, v.department_sort NULLS LAST, v.emp_order, v.full_name`);
   const diff = all.filter(x => x.cur_type !== x.new_type || x.cur_off !== x.new_off);
@@ -92,7 +93,7 @@ router.post('/employees-autotype', api(async req => {
   if (dry) return { dryRun: true, total: all.length, changes: todo, keptLocked: kept.length, lockedAll: all.filter(x => x.type_locked).length };
   const snap = await snapshot(req, `Tự nhận loại + lịch nghỉ (${todo.length} người)`, todo.map(x => x.id));
   if (todo.length) await pool.query(`UPDATE employees SET employee_type = t.nt, weekly_off = t.nw, type_locked=false, updated_at=now() FROM (SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS nt, unnest($3::text[]) AS nw) t WHERE employees.id = t.id`, [todo.map(x => x.id), todo.map(x => x.new_type), todo.map(x => x.new_off)]);
-  const cnt = await one(`SELECT count(*) FILTER (WHERE employee_type='manager')::int AS managers, count(*) FILTER (WHERE employee_type='worker')::int AS workers FROM employees WHERE sso_status='active'`);
+  const cnt = await one(`SELECT count(*) FILTER (WHERE employee_type='manager')::int AS managers, count(*) FILTER (WHERE employee_type='admin')::int AS admins, count(*) FILTER (WHERE employee_type='worker')::int AS workers FROM employees WHERE sso_status='active'`);
   await normalizeShifts();
   await require('../services/payroll').markStale(pool);
   await audit(req, 'employee.autotype', 'employee', null, { n: todo.length, keptLocked: kept.length, overwrite, snapshot: snap, ...cnt });
