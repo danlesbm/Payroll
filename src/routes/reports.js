@@ -6,7 +6,7 @@ const { bad, isUuid, str, api, forbid, sendXlsx } = require('../lib/http');
 const { Workbook } = require('../lib/xlsx');
 const { monthEnd, validYM } = require('../lib/dates');
 const G = require('../services/grades');
-const { dispPositions } = require('../lib/names');
+const { posTitle } = require('../lib/names');
 
 // Ai được xem báo cáo của bảng lương (nhóm) nào: cùng nhóm quyền xem bảng lương
 const PAY_ROLES = ['l2', 'l3', 'director', 'hr', 'view_pay'];
@@ -185,9 +185,10 @@ router.get('/employee-month/export', async (req, res) => {
   const run = await one('SELECT id, status FROM payroll_runs WHERE group_id=$1 AND year=$2 AND month=$3', [groupId, year, month]);
   if (!run) bad('Tháng này chưa có bảng lương', 404);
   const g = await one('SELECT name, kind FROM groups WHERE id=$1', [groupId]);
-  const lines = await rows(`SELECT pl.*, e.full_name, e.employee_code, e.positions, e.title, v.pay_department_name AS dept FROM payroll_lines pl JOIN employees e ON e.id=pl.employee_id JOIN v_employees v ON v.id=e.id
+  const lines = await rows(`SELECT pl.*, e.full_name, e.employee_code, e.positions, e.title, e.title_manual, e.is_lead, e.shift_no, v.pay_department_name AS dept FROM payroll_lines pl JOIN employees e ON e.id=pl.employee_id JOIN v_employees v ON v.id=e.id
     WHERE pl.run_id=$1 ORDER BY v.pay_department_sort NULLS LAST, v.pay_department_name, v.emp_order, e.sort_order, e.full_name`, [run.id]);
   const types = await typesList(), gs = await G.states(monthEnd(year, month), lines.map(l => l.employee_id));
+  const stT = Object.fromEntries((await rows("SELECT key, value FROM settings WHERE key IN ('plant_title_head','plant_title_deputy')")).map(r => [r.key, r.value]));
   const wb = new Workbook(), ws = wb.sheet(`Thống kê ${pad2(month)}-${year}`);
   ws.set(1, 1, `BẢNG THỐNG KÊ LƯƠNG, THƯỞNG TỪNG NHÂN VIÊN — THÁNG ${month}/${year} — ${g.name}`, { b: true, sz: 13 });
   const stLabel = { draft: 'lương nháp (cấp 2)', submitted: 'đang ở cấp 3', pending_dir: 'chờ Giám đốc khoá', locked: 'đã khoá' }[run.status];
@@ -196,7 +197,7 @@ router.get('/employee-month/export', async (req, res) => {
   const col = (head, w, t, val, o = {}) => ({ head, w, t, val, ...o });
   const cols = [
     col('STT', 5, 'text', (l, d, k) => k + 1), col('Họ tên', 24, 'text', l => l.full_name), col('Mã NV', 10, 'text', l => l.employee_code || ''), col('Bộ phận', 18, 'text', l => l.dept || ''),
-    col('Chức danh', 18, 'text', l => dispPositions(l.positions, g.kind, {}, l.title)), col('Bậc lương BH', 14, 'text', l => gs.get(l.employee_id)?.label || ''),
+    col('Chức danh', 18, 'text', l => posTitle(l, g.kind, stT)), col('Bậc lương BH', 14, 'text', l => gs.get(l.employee_id)?.label || ''),
     col('Ngày công', 9, 'n', l => num(l.work_days), { sum: true }), col('Công chuẩn', 9, 'n', (l, d) => num(d.standardDays)), col('Công tối thiểu', 9, 'n', (l, d) => d.minDays === undefined ? num(d.standardDays) : num(d.minDays)), col('Công thực tế − chuẩn (+/−)', 11, 'n', (l, d) => d.diffStd !== undefined ? num(d.diffStd) : num(l.work_days) - num(d.standardDays)), col('Công làm thêm (LT)', 10, 'n', (l, d) => num(d.otWork)), col('Công tăng ca', 9, 'n', (l, d) => num(d.otDays)), col('Tỷ lệ công lương', 9, 'k', (l, d) => f4(d.ratio)), col('Tỷ lệ công thưởng', 9, 'k', (l, d) => f4(d.ratioBonus ?? d.ratio)),
     ...types.map(t => col(`${t.name} (${KIND_VN[t.kind]})`, 13, t.kind === 'amount' ? 'm' : 'k', (l, d) => f4(d.coefs?.[t.code]), { sum: t.kind === 'amount', coef: true })),
     col('Tổng hệ số BH', 11, 'k', (l, d) => f4(d.insCoef), { coef: true }), col('Tổng hệ số thưởng', 11, 'k', (l, d) => f4(d.bonusCoef), { coef: true }),

@@ -37,7 +37,7 @@ router.get('/groups', api(async req => {
   return { groups: out };
 }));
 
-const { dispPositions } = require('../lib/names');
+const { posTitle } = require('../lib/names');
 const titleSettings = async () => Object.fromEntries((await rows("SELECT key, value FROM settings WHERE key IN ('plant_title_head','plant_title_deputy')")).map(r => [r.key, r.value]));
 router.get('/:groupId/:year/:month', api(async req => {
   const groupId = groupParam(req); const { year, month } = ym(req);
@@ -45,10 +45,10 @@ router.get('/:groupId/:year/:month', api(async req => {
   const group = await one('SELECT id, name, kind FROM groups WHERE id=$1', [groupId]);
   if (!group) bad('Không tìm thấy bảng lương', 404);
   const run = await one('SELECT * FROM payroll_runs WHERE group_id=$1 AND year=$2 AND month=$3', [groupId, year, month]);
-  const lines = run ? await rows(`SELECT pl.*, e.full_name, e.employee_code, e.positions, e.title, e.employee_type, v.pay_department_name AS department_name
+  const lines = run ? await rows(`SELECT pl.*, e.full_name, e.employee_code, e.positions, e.title, e.title_manual, e.is_lead, e.shift_no, e.employee_type, v.pay_department_name AS department_name
       FROM payroll_lines pl JOIN employees e ON e.id=pl.employee_id LEFT JOIN v_employees v ON v.id=e.id WHERE pl.run_id=$1
       ORDER BY v.pay_department_sort NULLS LAST, v.pay_department_name, v.emp_order, e.sort_order, e.full_name`, [run.id]) : [];
-  const stT = await titleSettings(); lines.forEach(l => { l.positions = dispPositions(l.positions, group.kind, stT, l.title); });
+  const stT = await titleSettings(); lines.forEach(l => { l.positions = posTitle(l, group.kind, stT); });
   const sheets = relevant(await groupSheets(pool, groupId, year, month));
   const allIn = list => sheets.length > 0 && sheets.every(s => list.includes(s.status));
   const allReceived = allIn(['pending_l2', 'pending_l3']);
@@ -257,13 +257,13 @@ coefRouter.get('/', api(async req => {
   const n = nowVN(), today0 = `${n.year}-${String(n.month).padStart(2, '0')}-${String(n.day).padStart(2, '0')}`;
   const today = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.asOf || '')) ? req.query.asOf : today0;   // xem hệ số có hiệu lực tại ngày bất kỳ
   // Thứ tự như bảng lương: bảng lương (theo thứ tự cấu hình) → HĐQT, BKS, BGĐ rồi các phòng → người
-  const emps = await rows(`SELECT v.id, v.full_name, v.employee_code, v.positions, v.title, v.employee_type, v.pay_department_name AS department_name, v.sheet_id, v.group_id, v.group_name, v.group_kind
+  const emps = await rows(`SELECT v.id, v.full_name, v.employee_code, v.positions, v.title, v.title_manual, v.is_lead, v.shift_no, v.employee_type, v.pay_department_name AS department_name, v.sheet_id, v.group_id, v.group_name, v.group_kind
     FROM v_employees v LEFT JOIN groups g ON g.id=v.group_id WHERE v.sso_status='active' AND v.payroll_active AND v.group_id IS NOT NULL
     ORDER BY g.sort_order, v.group_name, v.pay_department_sort NULLS LAST, v.pay_department_name, v.emp_order, v.sort_order, v.full_name`);
   const cm = new Map((await rows(`SELECT DISTINCT ON (employee_id) id, employee_id, vals, effective_from FROM coefficient_history WHERE effective_from <= $1 ORDER BY employee_id, effective_from DESC, id DESC`, [today])).map(c => [c.employee_id, c]));
   const stT = await titleSettings();
   const gs = await G.states(today, emps.map(e => e.id));
-  return { employees: emps.filter(e => req.auth.canAny(PAY_ROLES, { groupId: e.group_id, sheetId: e.sheet_id })).map(e => ({ ...e, grade: gs.get(e.id) || null, positions: dispPositions(e.positions, e.group_kind, stT, e.title), history_id: cm.get(e.id)?.id || null, vals: cm.get(e.id)?.vals || {}, effective_from: cm.get(e.id)?.effective_from || null, editable: req.auth.can('hr', { groupId: e.group_id, sheetId: e.sheet_id }) })),
+  return { employees: emps.filter(e => req.auth.canAny(PAY_ROLES, { groupId: e.group_id, sheetId: e.sheet_id })).map(e => ({ ...e, grade: gs.get(e.id) || null, positions: posTitle(e, e.group_kind, stT), history_id: cm.get(e.id)?.id || null, vals: cm.get(e.id)?.vals || {}, effective_from: cm.get(e.id)?.effective_from || null, editable: req.auth.can('hr', { groupId: e.group_id, sheetId: e.sheet_id }) })),
     coefTypes: await rows('SELECT code, name, kind, is_total FROM coefficient_types WHERE active ORDER BY sort_order, code'), grades: await rows('SELECT scale, grade, coefficient, months_to_next FROM salary_grades ORDER BY scale, grade'), gradeCoef: (await G.coefCode()).code, asOf: today, today: today0 };
 }));
 coefRouter.delete('/history/:id', api(async req => {

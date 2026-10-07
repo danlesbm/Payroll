@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS allowance_groups (
   sort_order int NOT NULL DEFAULT 0, active boolean NOT NULL DEFAULT true, note text
 );
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS allowance_group_id uuid REFERENCES allowance_groups(id) ON DELETE SET NULL;
+-- Chức danh sửa tay (tab Nhân sự): ưu tiên hơn chức danh tự động (Trưởng ca / ĐHV / theo SSO)
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS title_manual text;
 ALTER TABLE sheets ADD COLUMN IF NOT EXISTS print_title text;
 ALTER TABLE sheets ADD COLUMN IF NOT EXISTS use_safety boolean NOT NULL DEFAULT false;
 ALTER TABLE sheets ADD COLUMN IF NOT EXISTS use_labor boolean NOT NULL DEFAULT true;
@@ -317,7 +319,7 @@ CREATE TABLE IF NOT EXISTS period_ratings (
 );
 
 -- v6.8: chức danh hiển thị ở nhà máy (Trưởng phòng -> Giám đốc nhà máy ...); để trống = giữ nguyên
-INSERT INTO settings(key,value) VALUES ('plant_title_head','Giám đốc nhà máy'),('plant_title_deputy','P. Giám đốc nhà máy') ON CONFLICT (key) DO NOTHING;
+INSERT INTO settings(key,value) VALUES ('plant_title_head','Giám đốc NM'),('plant_title_deputy','P. Giám đốc NM') ON CONFLICT (key) DO NOTHING;
 
 -- v6.10: quy trình mới (cấp 1 → cấp 2 → cấp 3 → Giám đốc). Mở rộng ràng buộc trạng thái; "adjusting" cũ gộp vào "pending_l2".
 ALTER TABLE periods DROP CONSTRAINT IF EXISTS periods_status_check;
@@ -517,4 +519,12 @@ DO $$ DECLARE t text; c text; BEGIN
     END LOOP;
     EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I CHECK (employee_type IN (''manager'',''admin'',''worker''))', t, t || '_employee_type_chk');
   END LOOP;
+END $$;
+-- v6.22: chức danh ở nhà máy viết gọn "Giám đốc NM" / "P. Giám đốc NM" (một lần; chỉ đổi nếu vẫn là tên mặc định cũ)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM settings WHERE key='v622_titles') THEN
+    UPDATE settings SET value='Giám đốc NM' WHERE key='plant_title_head' AND value='Giám đốc nhà máy';
+    UPDATE settings SET value='P. Giám đốc NM' WHERE key='plant_title_deputy' AND value='P. Giám đốc nhà máy';
+    INSERT INTO settings(key,value,note) VALUES('v622_titles','1','Đổi chức danh nhà máy sang Giám đốc NM / P. Giám đốc NM');
+  END IF;
 END $$;
