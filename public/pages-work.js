@@ -329,7 +329,7 @@ PAGES.payroll = async (me, root) => {
       const cols = [
         ['Công', '', l => String(Math.round(Number(l.work_days) * 100) / 100)], ['Chuẩn', 'Công tiêu chuẩn theo hợp đồng của người này trong tháng', l => l.detail.standardDays ?? ''], ['+/−', 'Công thực tế trừ công tiêu chuẩn', diff],
         any(l => l.detail.otWork || 0) && ['LT', 'Công làm thêm (ký hiệu LT)', l => l.detail.otWork || '·'],
-        ['Lương BH', '', l => money(l.insurance_salary), l => l.insurance_salary], ['Thưởng', '', l => money(l.bonus), l => l.bonus],
+        ['Lương BH', 'Lương bảo hiểm, gồm phụ cấp an toàn', l => money(l.insurance_salary), l => l.insurance_salary], ['Thưởng', '', l => money(l.bonus), l => l.bonus],
         any(nightV) && ['Làm đêm', 'Lương + thưởng làm đêm', l => money(nightV(l)), nightV],
         any(extraV) && ['Làm thêm', 'Lương + thưởng làm thêm (công vượt chuẩn, sửa chữa…)', l => money(extraV(l)), extraV],
         any(holV) && ['Làm lễ/tết', 'Lương + thưởng làm ngày lễ, tết', l => money(holV(l)), holV],
@@ -386,12 +386,12 @@ PAGES.payroll = async (me, root) => {
       ${x.dailySalary ? row('Đơn giá ngày: lương · thưởng <span class="muted small">(lương: (lương BH + phụ cấp) ÷ công chuẩn; thưởng: hệ số × đơn giá ÷ công chuẩn) — căn cứ tính làm đêm/thêm/lễ</span>', `${money(x.dailySalary)} · ${money(x.dailyBonus)}`) : ''}
       <tr><th colspan="2">LƯƠNG</th></tr>
       ${x.laborGrade ? row(`Xếp loại lao động <b>${esc(x.laborGrade)}</b> → nhân ×${x.laborFactor} vào lương & thưởng`, '') : ''}
-      ${row(`Lương bảo hiểm = hệ số BH ${x.insCoef} × lương cơ sở ${money(x.baseWage)} × ${Math.min(x.ratio, 1)}${x.laborGrade ? ' × ' + x.laborFactor : ''}`, money(l.insurance_salary), 1)}
+      ${row(`Lương bảo hiểm = hệ số BH ${x.insCoef} × lương cơ sở ${money(x.baseWage)} × ${Math.min(x.ratio, 1)}${x.laborGrade ? ' × ' + x.laborFactor : ''}${x.safetyInInsurance && x.safetyAllowance ? ` <span class="muted small">(${money(x.insuranceCoefSalary)}) + phụ cấp an toàn ${money(x.safetyAllowance)}${x.safetyGrade ? ' (xếp loại ' + esc(x.safetyGrade) + ': ×' + x.safetyFactor + ')' : ''}</span>` : ''}`, money(l.insurance_salary), 1)}
       ${!x.premiumInBonus && (x.nightSalary || x.extraSalary || x.holidaySalary) ? `${row(`Làm đêm <span class="muted small">(${x.premiumDays?.night || 0} ngày tương đương × ${money(x.dailySalary)})</span>`, money(x.nightSalary))}
       ${row(`Làm thêm / sửa chữa <span class="muted small">(${x.otDays || 0} công vượt chuẩn = ${money(x.otSalaryAmt)}; ${x.premiumDays?.extra || 0} ngày tương đương theo % ký hiệu)</span>`, money(x.extraSalary))}
       ${row(`Làm lễ, tết <span class="muted small">(${x.premiumDays?.holiday || 0} ngày tương đương theo % ngày lễ)</span>`, money(x.holidaySalary))}` : ''}
-      ${row('Phụ cấp' + (x.safetyGrade ? ` <span class="muted small">(gồm phụ cấp an toàn xếp loại ${esc(x.safetyGrade)}: ×${x.safetyFactor})</span>` : ''), money(l.allowance))}
-      ${x.insuranceBase !== undefined ? row(`Mức lương đóng bảo hiểm <span class="muted small">(lương BH chưa xếp loại ${money(x.insuranceFull)} + phụ cấp ${money(l.allowance)})</span>`, money(x.insuranceBase)) : ''}
+      ${row('Phụ cấp' + (x.safetyInInsurance ? (x.safetyAllowance ? ' <span class="muted small">(phụ cấp khác; phụ cấp an toàn đã gộp vào lương bảo hiểm)</span>' : '') : (x.safetyGrade ? ` <span class="muted small">(gồm phụ cấp an toàn xếp loại ${esc(x.safetyGrade)}: ×${x.safetyFactor})</span>` : '')), money(l.allowance))}
+      ${x.insuranceBase !== undefined ? row(`Mức lương đóng bảo hiểm <span class="muted small">(lương BH chưa xếp loại ${money(x.insuranceFull)} + phụ cấp ${money(x.insuranceBase - x.insuranceFull)})</span>`, money(x.insuranceBase)) : ''}
       ${(x.deductions || []).map(t => row('&nbsp;&nbsp;trừ ' + esc(t.name), '−' + money(t.amount))).join('')}
       ${ex('deduction').map(e => row(`&nbsp;&nbsp;trừ ${esc(e.label)} <span class="muted small">(${how(e)})</span>`, '−' + money(e.amount))).join('')}
       ${row('Lương thực lĩnh', money(x.salaryNet ?? (l.insurance_salary + l.allowance - l.deduction)), 1)}
