@@ -42,7 +42,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
   const [entries, actual, codes, codeMealPrices, mealRates, coefTypes, dedTypes, params, prices, items, coefRows, settingRows, ratingRows, laborRows, safetyRows, payRates] = await Promise.all([
     q(c, `SELECT ae.employee_id, ae.day, ae.code, s.meal_mode FROM attendance_entries ae JOIN periods p ON p.id=ae.period_id JOIN sheets s ON s.id=p.sheet_id
           WHERE s.group_id=$1 AND p.year=$2 AND p.month=$3`, [groupId, year, month]),
-    q(c, `SELECT ma.employee_id, ma.meal_type_id, SUM(ma.quantity) AS qty FROM meal_actual ma JOIN periods p ON p.id=ma.period_id JOIN sheets s ON s.id=p.sheet_id
+    q(c, `SELECT ma.employee_id, ma.meal_type_id, SUM(CASE WHEN ma.code IS NOT NULL THEN COALESCE(ac.meal_qty, 0) ELSE ma.quantity END) AS qty FROM meal_actual ma LEFT JOIN attendance_codes ac ON ac.code=ma.code JOIN periods p ON p.id=ma.period_id JOIN sheets s ON s.id=p.sheet_id
           WHERE s.group_id=$1 AND p.year=$2 AND p.month=$3 GROUP BY ma.employee_id, ma.meal_type_id`, [groupId, year, month]),
     q(c, 'SELECT code, work_value, work_day, work_night, off_day_zero, pct_kind, pay_scope, is_ot FROM attendance_codes'),
     q(c, 'SELECT code, group_id, amount, effective_from, id FROM code_meal_prices WHERE group_id IS NULL'),
@@ -108,14 +108,15 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
     // Ký hiệu "nghỉ bù / nghỉ phép" rơi vào ngày nghỉ hằng tuần hoặc ngày lễ không cộng công (ngày đó vốn đã được nghỉ)
     // Ký hiệu làm thêm (LT…) không vào công thường mà trả riêng theo % của ký hiệu; ký hiệu "chỉ lương"/"chỉ thưởng" chỉ vào công tương ứng
     const keep = rawE.filter(x => !(offZero.has(x.code) && sc.offSet.has(x.day)));
-    const eff = keep.filter(x => !otSet.has(x.code)).map(x => x.code);
+    // Ký hiệu "không tính lương" (pay_scope 'none'): không vào công lương/thưởng nào (vẫn có thể có tiền ăn ca theo ký hiệu)
+    const eff = keep.filter(x => !otSet.has(x.code) && scopeOf[x.code] !== 'none').map(x => x.code);
     const effS = eff.filter(cd => scopeOf[cd] !== 'bonus'), effB = eff.filter(cd => scopeOf[cd] !== 'salary');
     const wd = calc.workDays(effS, codeWork), wdB = calc.workDays(effB, codeWork), wTotal = calc.workDays(eff, codeWork), wDay = calc.workDays(eff, codeDay), wNight = calc.workDays(eff, codeNight);
     const zeroed = rawE.length - keep.length;
-    const otCnt = keep.filter(x => otSet.has(x.code)).reduce((n, x) => n + calc.num(codeWork[x.code]), 0);
+    const otCnt = keep.filter(x => otSet.has(x.code) && scopeOf[x.code] !== 'none').reduce((n, x) => n + calc.num(codeWork[x.code]), 0);
     const pctOf = code => rateOf.get(code + '|' + (e.allowance_group_id || '')) ?? rateOf.get(code + '|') ?? 100;
     const premOpt = skipScope => ({ work: workOf, kind: kindFull, ot: cd => otSet.has(cd), pct: pctOf,
-      holPct: day => sctx.pct.get(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`) || 100, skip: x => (offZero.has(x.code) && sc.offSet.has(x.day)) || scopeOf[x.code] === skipScope });
+      holPct: day => sctx.pct.get(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`) || 100, skip: x => (offZero.has(x.code) && sc.offSet.has(x.day)) || scopeOf[x.code] === skipScope || scopeOf[x.code] === 'none' });
     const prem = workdaysLib.premiumDays(rawE, premOpt('bonus')), premB = workdaysLib.premiumDays(rawE, premOpt('salary'));
     // Kiểu ăn ca của bộ phận: auto = theo ký hiệu công; actual = chỉ theo bảng chấm ăn ca riêng; auto_wait = theo ký hiệu công + bảng chấm ăn chờ ca
     const mealMode = e.meal_mode || 'auto', rawQty = actualByEmp.get(e.id) || {};
@@ -134,7 +135,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
     const counts = {}; for (const cde of empCodes) counts[cde] = (counts[cde] || 0) + 1;
     lines.push({ employeeId: e.id, workDays: wTotal, r, detail: { workSalary: wd, workBonus: wdB, otWork: otCnt, diffStd: Math.round((wTotal - std) * 100) / 100, rateBasis: sc.basis, planFactor: pfNum, rateDiv: r.rateDiv, shiftNo: e.shift_no || null, groupMin: gm, laborGrade, laborFactor: r.laborFactor, safetyGrade, safetyFactor: r.safetyFactor, safetyAllowance: r.safetyAllowance, counts, workDay: wDay, workNight: wNight, mealQty: qty, mealMode, mealCodes: auto.items, mealDays: auto.days, mealActualAmount: calc.mealAmount(qty, rateByType), mealRates: rateByType, coefs: coefRow?.vals || {}, coefEffectiveFrom: coefRow?.effective_from || null,
       unitPrice: calc.num(price?.amount), baseWage, standardDays: std, minDays: minD, ratio: r.ratio, ratioBonus: r.ratioBonus, payStatus: r.payStatus, otDays: r.otDays, dailySalary: r.dailySalary, dailyBonus: r.dailyBonus, otSalary: sc.otSalary, otBonus: sc.otBonus,
-      nightSalary: r.nightSalary, nightBonus: r.nightBonus, extraSalary: r.extraSalary, extraBonus: r.extraBonus, holidaySalary: r.holidaySalary, holidayBonus: r.holidayBonus, otSalaryAmt: r.otSalaryAmt, otBonusAmt: r.otBonusAmt, premiumDays: r.premiumDays,
+      nightSalary: r.nightSalary, nightBonus: r.nightBonus, extraSalary: r.extraSalary, extraBonus: r.extraBonus, holidaySalary: r.holidaySalary, holidayBonus: r.holidayBonus, otSalaryAmt: r.otSalaryAmt, otBonusAmt: r.otBonusAmt, premiumDays: r.premiumDays, premiumInBonus: r.premiumInBonus, premSal: r.premSal, premBon: r.premBon,
       weeklyOff: sc.weeklyOff, scheduleSource: sc.source, offDays: sc.info.offDays.length, holidayDays: sc.info.holidays, zeroedOffDays: zeroed, overridden: !!override, insCoef: r.insCoef, bonusCoef: r.bonusCoef, bonusBase: r.bonusBase,
       monthlyBonus: r.monthlyBonus, bonusDeduction: r.bonusDeduction, salaryNet: r.salaryNet, bonusNet: r.bonusNet, extras: r.extraDetail, deductions: r.deductionDetail, periodicDeduction: r.periodicDeduction, monthlyDeduction: r.monthlyDeduction, warnings } });
   }

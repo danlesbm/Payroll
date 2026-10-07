@@ -494,3 +494,20 @@ CREATE TABLE IF NOT EXISTS employee_snapshots (
   undone_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- v6.20: công không trả lương (pay_scope 'none') nhưng vẫn có thể tính ăn ca; bảng chấm ăn ca riêng / chờ ca chấm bằng ký hiệu công
+ALTER TABLE attendance_codes DROP CONSTRAINT IF EXISTS attendance_codes_pay_scope_check;
+ALTER TABLE attendance_codes ADD CONSTRAINT attendance_codes_pay_scope_check CHECK (pay_scope IN ('both','salary','bonus','none'));
+-- Số suất ăn khi ký hiệu được chấm ở bảng chấm ăn ca riêng (Kiểu 2) / ăn chờ ca (Kiểu 3); 0 = ký hiệu không tính suất ăn
+ALTER TABLE attendance_codes ADD COLUMN IF NOT EXISTS meal_qty numeric(5,2) NOT NULL DEFAULT 1;
+ALTER TABLE meal_actual ADD COLUMN IF NOT EXISTS code text REFERENCES attendance_codes(code) ON UPDATE CASCADE ON DELETE SET NULL;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM settings WHERE key='v620_seed') THEN
+    -- Mặc định: ký hiệu đang có tiền ăn ca (Kiểu 1) = 1 suất; chưa cài tiền ăn nào thì ký hiệu có công = 1 suất
+    IF EXISTS (SELECT 1 FROM code_meal_prices WHERE group_id IS NULL AND amount > 0) THEN
+      UPDATE attendance_codes a SET meal_qty = CASE WHEN COALESCE((SELECT p.amount FROM code_meal_prices p WHERE p.code=a.code AND p.group_id IS NULL ORDER BY p.effective_from DESC, p.id DESC LIMIT 1), 0) > 0 THEN 1 ELSE 0 END;
+    ELSE
+      UPDATE attendance_codes SET meal_qty = CASE WHEN work_value > 0 AND NOT off_day_zero THEN 1 ELSE 0 END;
+    END IF;
+    INSERT INTO settings(key,value,note) VALUES('v620_seed','1','Suất ăn của ký hiệu công (bảng chấm ăn ca riêng/chờ ca) lấy theo ký hiệu đang có tiền ăn ca');
+  END IF;
+END $$;
