@@ -116,3 +116,14 @@ td.chgtd{background:#fef3c7}
 .coeftb th.ps,.coeftb td.ps{width:110px;min-width:90px;max-width:140px}
 .coeftb tr.grprow td{background:#e0e7ff;color:#1e3a8a;font-weight:700;font-size:13px;text-transform:uppercase;padding:7px 8px}
 .coeftb tr.dptrow td{background:#f1f5f9;font-weight:600;font-style:italic;padding:5px 8px}
+/* Bảng chấm công gọn: đủ 31 ngày + cột chức danh trên một màn hình, không cần kéo ngang */
+.att th,.att td{padding:3px 4px}
+.att td.name{min-width:124px;max-width:180px;white-space:normal}
+.att td.name .badge{padding:0 5px;font-size:10.5px}
+.att th.pos,.att td.pos{min-width:58px;max-width:96px;white-space:normal;font-size:11px;line-height:1.25}
+.att th.c{min-width:22px;padding:2px 0;font-size:10px;line-height:1.2}
+.att td.c{width:22px;min-width:22px;height:30px;font-size:10px;letter-spacing:-.4px;scroll-margin-left:130px}
+.att th.n,.att td.n{padding:3px 2px;font-size:11px}
+.att thead th.n{white-space:normal;line-height:1.2;max-width:44px}
+.att th.rt,.att td.rt{padding:2px 1px;font-size:10.5px;text-align:center}
+.att td.rt select{padding:3px 1px;font-size:12px}

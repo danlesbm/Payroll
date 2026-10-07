@@ -9,6 +9,7 @@ const { recalcIfExists, autoCalc } = require('../services/payroll');
 const { safetyHolders } = require('../services/safety');
 const { monthEnd } = require('../lib/dates');
 const sched = require('../services/schedule');
+const { dispPositions } = require('../lib/names');
 
 const VIEW_ROLES = ['timekeeper', 'l1', 'l2', 'l3', 'director', 'view_att'];
 // Các bước ở cấp bảng chấm công (người chấm, cấp 1, trả lại). Từ cấp 2 trở lên làm ở trang Bảng lương (theo cả bảng lương).
@@ -98,6 +99,9 @@ router.get('/:sheetId/:year/:month', api(async req => {
     };
   });
   const { p } = data;
+  // Chức danh hiển thị (giống bảng lương)
+  const stT = Object.fromEntries((await rows("SELECT key, value FROM settings WHERE key IN ('plant_title_head','plant_title_deputy')")).map(r => [r.key, r.value]));
+  data.employees.forEach(e => { e.pos_disp = dispPositions(e.positions, sheet.group_kind, stT, e.title); });
   if (vs.depts) {   // người chỉ có quyền theo bộ phận: chỉ thấy nhân sự của các bộ phận đó
     const ok = new Set(data.employees.filter(e => vs.depts.has(String(e.att_dept_id))).map(e => e.id));
     data.employees = data.employees.filter(e => ok.has(e.id));
