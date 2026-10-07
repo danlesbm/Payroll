@@ -103,13 +103,17 @@ function calcLine(i) {
   const insuranceSalary = round(insCoef * num(i.baseWage) * mainS * lf);
   // Căn cứ tính làm đêm / làm thêm / lễ phần lương = lương BH (đủ công, đã nhân xếp loại) + phụ cấp (gồm phụ cấp an toàn)
   const premBaseS = insCoef * num(i.baseWage) * lf + allowance;
-  const otSalaryAmt = round(premBaseS * overS), otBonusAmt = round(bonusCoef * num(i.unitPrice) * overB * lf * pf);
+  const pd = i.premiumDays || {}, pdB = i.premiumDaysBonus || pd;
+  // Làm thêm (công vượt chuẩn) và làm lễ tính trên đơn giá ngày ĐÃ GỒM tiền làm đêm bình quân của tháng (như bảng Excel nhà máy):
+  // (lương + thưởng + phụ cấp + tiền làm đêm) ÷ công chuẩn × số công × % → hệ số (1 + công đêm tương đương ÷ công chuẩn)
+  const nfS = div > 0 ? 1 + num(pd.night) / div : 1, nfB = div > 0 ? 1 + num(pdB.night) / div : 1;
+  const otSalaryAmt = round(premBaseS * overS * nfS), otBonusAmt = round(bonusCoef * num(i.unitPrice) * overB * lf * pf * nfB);
   const bonusBase = round(bonusCoef * num(i.unitPrice) * mainB * lf * pf);
   // Công làm đêm / làm thêm (sửa chữa…) / làm ngày lễ: số "ngày tương đương" nhân đơn giá ngày (áp dụng cả lương và thưởng)
-  const pd = i.premiumDays || {}, pdB = i.premiumDaysBonus || pd, rawDayS = div > 0 ? premBaseS / div : 0, rawDayB = div > 0 ? bonusCoef * num(i.unitPrice) * lf * pf / div : 0;
+  const rawDayS = div > 0 ? premBaseS / div : 0, rawDayB = div > 0 ? bonusCoef * num(i.unitPrice) * lf * pf / div : 0;
   const nightSalary = round(rawDayS * num(pd.night)), nightBonus = round(rawDayB * num(pdB.night));
   const extraSalary = otSalaryAmt + round(rawDayS * num(pd.extra)), extraBonus = otBonusAmt + round(rawDayB * num(pdB.extra));
-  const holidaySalary = round(rawDayS * num(pd.holiday)), holidayBonus = round(rawDayB * num(pdB.holiday));
+  const holidaySalary = round(rawDayS * nfS * num(pd.holiday)), holidayBonus = round(rawDayB * nfB * num(pdB.holiday));
   // Tiền làm đêm / làm thêm / làm lễ phần theo hệ số lương: mặc định chuyển hết sang bảng thưởng (gộp vào cột thưởng làm đêm/thêm/lễ),
   // bảng lương chỉ còn đến lương đóng bảo hiểm. premiumInBonus=false giữ cách cũ (phần theo hệ số lương nằm ở bảng lương).
   const toBonus = i.premiumInBonus !== false;
