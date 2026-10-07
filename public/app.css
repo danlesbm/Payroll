@@ -97,7 +97,7 @@ td.chgtd{background:#fef3c7}
 .coeftb th,.coeftb td{padding:5px 5px;white-space:normal;line-height:1.25}
 .coeftb th{font-size:11.5px;vertical-align:bottom}
 .coeftb th.n,.coeftb td.n{text-align:center}
-.coeftb td.sk{min-width:120px;max-width:150px}
+.coeftb th.sk,.coeftb td.sk{width:120px;min-width:110px;max-width:130px}
 .coeftb td.skr{width:1%;min-width:96px}
 .coeftb td.skr .btn{display:block;width:100%;margin:0 0 3px;padding:3px 6px;font-size:11.5px;white-space:nowrap}
 .coeftb td .small{font-size:11px}
@@ -109,5 +109,8 @@ td.chgtd{background:#fef3c7}
 .coeftb th.gr,.coeftb td.gr{width:84px;max-width:96px;min-width:70px}
 .coeftb th.dt,.coeftb td.dt{width:74px;max-width:80px}
 .coeftb th.cf{font-size:10.5px;line-height:1.2;hyphens:auto}
-.coeftb td:nth-child(2){width:84px;max-width:110px}.coeftb td:nth-child(3){width:58px}
-.coeftb td.cf{white-space:nowrap;word-break:normal}.coeftb th.cf,.coeftb td.cf{width:58px;max-width:64px}.coeftb td:nth-child(3){white-space:nowrap}
+.coeftb td.dp{width:84px;max-width:110px}.coeftb td.tp{width:58px;white-space:nowrap}
+.coeftb td.cf{white-space:nowrap;word-break:normal}.coeftb th.cf,.coeftb td.cf{width:58px;max-width:64px}
+
+/* Bảng hệ số: cột Chức vụ riêng (giữa Phòng và Loại) */
+.coeftb th.ps,.coeftb td.ps{width:110px;min-width:90px;max-width:140px}
