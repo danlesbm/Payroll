@@ -1,7 +1,7 @@
 # SBM Payroll v6.20 — cập nhật (gồm toàn bộ v6.19)
 
 ## Cách cập nhật
-Chép thư mục `payroll/` đè lên (KHÔNG đụng `.env` / `docker-compose.yml`), rồi `docker compose build payroll && docker compose up -d payroll`. Schema tự cập nhật. Sau đó bấm **Tính lại** các bảng lương nháp. File CSS/JS có số phiên `?v=620b`.
+Chép thư mục `payroll/` đè lên (KHÔNG đụng `.env` / `docker-compose.yml`), rồi `docker compose build payroll && docker compose up -d payroll`. Schema tự cập nhật. Sau đó bấm **Tính lại** các bảng lương nháp. File CSS/JS có số phiên `?v=620c`.
 
 ## 1. Bảng chấm ăn ca riêng (Kiểu 2) / ăn chờ ca (Kiểu 3) chấm bằng ký hiệu công
 - Không còn ô nhập số. Mỗi bảng có thanh ký hiệu giống bảng chấm công: chọn ký hiệu rồi **bấm hoặc kéo** qua các ô ngày, chọn "✕ Xoá" để xoá ô, xong bấm **Lưu**.
@@ -27,3 +27,10 @@ Chép thư mục `payroll/` đè lên (KHÔNG đụng `.env` / `docker-compose.y
 
 ## Ghi chú bảo hiểm
 - Các khoản trừ theo % (BHXH, BHYT, BHTN, kinh phí công đoàn) chỉ tính trên lương bảo hiểm theo công thường (hệ số BH × lương cơ sở × công tính lương, tối đa công chuẩn), không gồm làm đêm, làm thêm, lễ tết, phụ cấp.
+
+## 5. Cách chia tiền làm đêm / lễ / tăng ca (sửa lại)
+- Phụ cấp làm đêm luôn chỉ **30%** (theo % của ký hiệu), không nhân % ngày lễ.
+- Ngày lễ: phần vượt 100% (gồm cả phần nhân lễ của 30% đêm) vào cột **Làm lễ, tết**. Vd K1,3 ngày lễ 300%: lương 2 công; làm đêm 0,3; làm lễ 2 (ca ngày 300% − 100%) + 2,6 (ca đêm 390% − 100% − 30%) = 4,6 công.
+- Ngày công vượt công tiêu chuẩn (tính theo thứ tự ngày trong tháng) trả tăng ca theo hệ số ở *Công chuẩn* (vd ×2): cả ngày công vào làm thêm; ca đêm thêm 30% làm đêm và 30% × (hệ số − 1) vào làm thêm (vd 260% = 200% + 30% + 30%).
+- Tiền ăn ca: ô "Hiệu lực từ" giữ ngày vừa chọn sau khi lưu; thêm cột "Đang áp dụng từ". Chuyển ngày sớm hơn với cùng số tiền thì mức trùng ở ngày cũ được bỏ.
+- Bảo hiểm (không đổi): % trừ tính trên lương bảo hiểm theo công thường, tối đa đúng 1 tháng lương bảo hiểm, không gồm làm đêm / thêm / lễ / phụ cấp.

@@ -99,6 +99,12 @@ router.post('/code-meal-prices/bulk', api(async req => {
       const cur = (await c.query(`SELECT amount FROM code_meal_prices WHERE code=$1 AND group_id IS NOT DISTINCT FROM $2::uuid AND effective_from<=$3 ORDER BY effective_from DESC, id DESC LIMIT 1`, [r.code, r.groupId || null, eff])).rows[0];
       if (cur ? Number(cur.amount) === amount : amount === 0) continue;
       await c.query('INSERT INTO code_meal_prices(code, group_id, amount, effective_from, created_by) VALUES($1,$2,$3,$4,$5)', [r.code, r.groupId || null, amount, eff, req.auth.user.id]); saved++;
+      // Chuyển ngày hiệu lực sớm hơn (cùng số tiền): mức trùng tiền ngay sau ngày mới là thừa → xoá, để "đang áp dụng từ" hiện đúng ngày mới
+      for (;;) {
+        const nx = (await c.query(`SELECT id, amount FROM code_meal_prices WHERE code=$1 AND group_id IS NOT DISTINCT FROM $2::uuid AND effective_from>$3 ORDER BY effective_from, id LIMIT 1`, [r.code, r.groupId || null, eff])).rows[0];
+        if (!nx || Number(nx.amount) !== amount) break;
+        await c.query('DELETE FROM code_meal_prices WHERE id=$1', [nx.id]);
+      }
     }
   });
   await staleAll(); await audit(req, 'code_meal_price.bulk', 'code_meal_prices', null, { effectiveFrom: eff, saved });
