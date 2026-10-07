@@ -256,8 +256,10 @@ const stable = o => JSON.stringify(Object.keys(o || {}).sort().map(k => [k, Numb
 coefRouter.get('/', api(async req => {
   const n = nowVN(), today0 = `${n.year}-${String(n.month).padStart(2, '0')}-${String(n.day).padStart(2, '0')}`;
   const today = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.asOf || '')) ? req.query.asOf : today0;   // xem hệ số có hiệu lực tại ngày bất kỳ
-  const emps = await rows(`SELECT id, full_name, employee_code, positions, title, employee_type, pay_department_name AS department_name, sheet_id, group_id, group_name, group_kind
-    FROM v_employees WHERE sso_status='active' AND payroll_active AND group_id IS NOT NULL ORDER BY group_name, pay_department_sort NULLS LAST, pay_department_name, emp_order, sort_order, full_name`);
+  // Thứ tự như bảng lương: bảng lương (theo thứ tự cấu hình) → HĐQT, BKS, BGĐ rồi các phòng → người
+  const emps = await rows(`SELECT v.id, v.full_name, v.employee_code, v.positions, v.title, v.employee_type, v.pay_department_name AS department_name, v.sheet_id, v.group_id, v.group_name, v.group_kind
+    FROM v_employees v LEFT JOIN groups g ON g.id=v.group_id WHERE v.sso_status='active' AND v.payroll_active AND v.group_id IS NOT NULL
+    ORDER BY g.sort_order, v.group_name, v.pay_department_sort NULLS LAST, v.pay_department_name, v.emp_order, v.sort_order, v.full_name`);
   const cm = new Map((await rows(`SELECT DISTINCT ON (employee_id) id, employee_id, vals, effective_from FROM coefficient_history WHERE effective_from <= $1 ORDER BY employee_id, effective_from DESC, id DESC`, [today])).map(c => [c.employee_id, c]));
   const stT = await titleSettings();
   const gs = await G.states(today, emps.map(e => e.id));

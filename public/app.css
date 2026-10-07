@@ -114,3 +114,5 @@ td.chgtd{background:#fef3c7}
 
 /* Bảng hệ số: cột Chức vụ riêng (giữa Phòng và Loại) */
 .coeftb th.ps,.coeftb td.ps{width:110px;min-width:90px;max-width:140px}
+.coeftb tr.grprow td{background:#e0e7ff;color:#1e3a8a;font-weight:700;font-size:13px;text-transform:uppercase;padding:7px 8px}
+.coeftb tr.dptrow td{background:#f1f5f9;font-weight:600;font-style:italic;padding:5px 8px}
