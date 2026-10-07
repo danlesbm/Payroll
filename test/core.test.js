@@ -296,10 +296,16 @@ test('làm đêm / sửa chữa / lễ: tổng ngày = lễ% × (công + công c
   const o = { work, kind, pct: c => pctTab[c] ?? 100, holPct: d => (d === 1 ? 400 : 100) };
   assert.deepEqual(W.premiumDays([{ day: 5, code: 'K1' }], o), { night: 0, extra: 0, holiday: 0 });
   assert.deepEqual(W.premiumDays([{ day: 5, code: 'DEM' }], o), { night: 0.3, extra: 0, holiday: 0 });
-  // ngày lễ 400% + ca đêm 130%: tổng 520% = 1 (công) + 3 (lễ) + 1,2 (đêm 30% × 4)
-  assert.deepEqual(W.premiumDays([{ day: 1, code: 'DEM' }], o), { night: 1.2, extra: 0, holiday: 3 });
-  // sửa chữa 135% ngày lễ 400% → 540% = 1 + 3 + 1,4
-  assert.deepEqual(W.premiumDays([{ day: 1, code: 'SC' }], o), { night: 0, extra: 1.4, holiday: 3 });
+  // ngày lễ 400% + ca đêm 130%: tổng 520% = 1 (lương) + 0,3 (làm đêm, không nhân lễ) + 3,9 (lễ: 520% − 100% − 30%)
+  assert.deepEqual(W.premiumDays([{ day: 1, code: 'DEM' }], o), { night: 0.3, extra: 0, holiday: 3.9 });
+  // K1,3 ngày lễ 300%: lương 2 công, làm đêm 0,3, làm lễ 2 (ca ngày 300% − 100%) + 2,6 (ca đêm 390% − 100% − 30%)
+  assert.deepEqual(W.premiumDays([{ day: 1, code: 'K1,3' }], { ...o, holPct: d => (d === 1 ? 300 : 100) }), { night: 0.3, extra: 0, holiday: 4.6 });
+  // K1,3 vượt công tiêu chuẩn, tăng ca ×2: ca đêm 260% = 200% (tiền tăng ca) + 30% làm đêm + 30% làm thêm
+  assert.deepEqual(W.premiumDays([{ day: 2, code: 'K1' }, { day: 3, code: 'K1,3' }], { ...o, std: 1, otMult: 2 }), { night: 0.3, extra: 0.3, holiday: 0 });
+  // chưa vượt công tiêu chuẩn: chỉ 30% làm đêm
+  assert.deepEqual(W.premiumDays([{ day: 3, code: 'K1,3' }], { ...o, std: 26, otMult: 2 }), { night: 0.3, extra: 0, holiday: 0 });
+  // sửa chữa 135% ngày lễ 400% → 540% = 1 (lương) + 0,35 (sửa chữa) + 4,05 (lễ)
+  assert.deepEqual(W.premiumDays([{ day: 1, code: 'SC' }], o), { night: 0, extra: 0.35, holiday: 4.05 });
   // ký hiệu K1,3 (1 công ngày + 1 công đêm): % đêm chỉ tính trên phần công đêm
   assert.deepEqual(W.premiumDays([{ day: 5, code: 'K1,3' }], o), { night: 0.3, extra: 0, holiday: 0 });
   // ngày nghỉ bù trùng ngày nghỉ bị bỏ qua

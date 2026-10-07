@@ -70,17 +70,28 @@ function shiftGroupMin(rows) {
 }
 /** Số "ngày tương đương" làm đêm / làm thêm / làm lễ của một người trong tháng.
  *  Mỗi ngày công: c = %ký hiệu ÷ 100 (theo nhóm phụ cấp, mặc định 1), h = %ngày lễ ÷ 100 (mặc định 1).
- *  Phần tăng của ký hiệu = cơ sở × (c − 1) × h, cơ sở = công đêm (nhóm 'night') hoặc toàn bộ công ('extra'); phần lễ = công × (h − 1).
- *  Tổng ngày đó = h × (công + cơ sở × (c − 1)), vd lễ 400% + ca đêm 130% → 520%. */
+ *  Phụ cấp của ký hiệu (vd làm đêm 30%) = cơ sở × (c − 1), KHÔNG nhân % ngày lễ; cơ sở = công đêm (nhóm 'night') hoặc toàn bộ công ('extra').
+ *  Phần lễ (vào cột làm lễ) = công × (h − 1) + phụ cấp × (h − 1). Tổng ngày đó vẫn = h × (công + phụ cấp).
+ *  Vd K1,3 ngày lễ 300%: lương 2 công (100% + 100%), làm đêm 0,3, làm lễ 2 (ca ngày) + 2,6 (ca đêm: 390% − 100% − 30%) = 4,6.
+ *  Ngày công vượt công tiêu chuẩn (o.std, xếp theo thứ tự ngày) là tăng ca ×o.otMult: phần công đã trả riêng ở tiền tăng ca,
+ *  phụ cấp của ký hiệu vẫn 30% vào làm đêm, phần phụ cấp × (otMult − 1) vào làm thêm (vd ca đêm tăng ca ×2: 260% = 200% tăng ca + 30% đêm + 30% làm thêm). */
 function premiumDays(entries, o) {
   const out = { night: 0, extra: 0, holiday: 0 };
-  for (const e of entries || []) {
+  const std = num(o.std), otM = num(o.otMult); let cum = 0;
+  const list = [...(entries || [])].sort((a, b) => num(a.day) - num(b.day));
+  for (const e of list) {
     const w = o.work[e.code]; if (!w || (o.skip && o.skip(e))) continue;
     const val = num(w.value); if (!(val > 0)) continue;
     const kind = o.kind[e.code], c = o.pct(e.code) / 100, h = o.holPct(e.day) / 100;
     // Ký hiệu làm thêm (LT1–LT4…): trả nguyên % của ký hiệu (đã gồm đêm/lễ), không nhân thêm % ngày lễ
     if (o.ot && o.ot(e.code)) { out.extra += val * c; continue; }
-    if (kind) { const base = kind === 'night' ? (num(w.night) > 0 ? num(w.night) : val) : val; out[kind === 'night' ? 'night' : 'extra'] += base * (c - 1) * h; }
+    const over = std > 0 ? Math.max(0, Math.min(val, cum + val - std)) / val : 0; cum += val;   // phần công của ngày này vượt công tiêu chuẩn
+    if (kind) {
+      const base = kind === 'night' ? (num(w.night) > 0 ? num(w.night) : val) : val, add = base * (c - 1);
+      out[kind === 'night' ? 'night' : 'extra'] += add;
+      if (h !== 1) out.holiday += add * (h - 1);
+      if (over > 0 && otM > 1) out.extra += add * (otM - 1) * over;
+    }
     if (h !== 1) out.holiday += val * (h - 1);
   }
   for (const k of Object.keys(out)) out[k] = Math.round(out[k] * 10000) / 10000;

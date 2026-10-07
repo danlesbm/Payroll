@@ -115,9 +115,9 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
     const zeroed = rawE.length - keep.length;
     const otCnt = keep.filter(x => otSet.has(x.code) && scopeOf[x.code] !== 'none').reduce((n, x) => n + calc.num(codeWork[x.code]), 0);
     const pctOf = code => rateOf.get(code + '|' + (e.allowance_group_id || '')) ?? rateOf.get(code + '|') ?? 100;
-    const premOpt = skipScope => ({ work: workOf, kind: kindFull, ot: cd => otSet.has(cd), pct: pctOf,
+    const premOpt = (skipScope, otMult) => ({ std, otMult, work: workOf, kind: kindFull, ot: cd => otSet.has(cd), pct: pctOf,
       holPct: day => sctx.pct.get(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`) || 100, skip: x => (offZero.has(x.code) && sc.offSet.has(x.day)) || scopeOf[x.code] === skipScope || scopeOf[x.code] === 'none' });
-    const prem = workdaysLib.premiumDays(rawE, premOpt('bonus')), premB = workdaysLib.premiumDays(rawE, premOpt('salary'));
+    const prem = workdaysLib.premiumDays(rawE, premOpt('bonus', sc.otSalary)), premB = workdaysLib.premiumDays(rawE, premOpt('salary', sc.otBonus));
     // Kiểu ăn ca của bộ phận: auto = theo ký hiệu công; actual = chỉ theo bảng chấm ăn ca riêng; auto_wait = theo ký hiệu công + bảng chấm ăn chờ ca
     const mealMode = e.meal_mode || 'auto', rawQty = actualByEmp.get(e.id) || {};
     const qty = {}; for (const [t, v] of Object.entries(rawQty)) if ((mealMode === 'actual' && !waitTypes.has(t)) || (mealMode === 'auto_wait' && waitTypes.has(t))) qty[t] = v;
