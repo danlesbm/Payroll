@@ -286,7 +286,7 @@ async function attendanceXlsx(c, sheetIds, year, month) {
       ws.set(r, 1, ++k, { border: true, al: 'center' }); ws.set(r, 2, e.full_name, { border: true }); ws.set(r, 3, dispPositions(e.positions, sh.group_kind, st, e.title) || '', { border: true, wrap: true, sz: 10 });
       for (let d = 1; d <= days; d++) {
         const cd = ent[e.id]?.[d] || '', w = new Date(Date.UTC(year, month - 1, d)).getUTCDay();
-        if (cd && work[cd] && work[cd].pay_scope !== 'none' && !(work[cd].off_day_zero && sc.offSet.has(d))) { dsum += n(work[cd].work_day); nsum += n(work[cd].work_night); }
+        if (cd && work[cd] && !(work[cd].off_day_zero && sc.offSet.has(d))) { dsum += n(work[cd].work_day); nsum += n(work[cd].work_night); }
         ws.set(r, dcol(d), cd, { border: true, al: 'center', sz: 9, fill: sctx.holidays.has(`${year}-${pad(month)}-${pad(d)}`) ? 'FFE0B2' : sc.offSet.has(d) ? 'FFEDED' : undefined });
       }
       ws.set(r, cn - 1, dsum, { border: true, al: 'center', b: true }); ws.set(r, cn, nsum, { border: true, al: 'center', b: true });
