@@ -68,7 +68,20 @@ function dispPositions(positions, kind, st = {}, title = '') {
     t = has('giám đốc') ? 'Giám đốc' : has('phó gđ') ? 'P. Giám đốc' : has('hội đồng quản trị') ? 'Thành viên HĐQT' : has('ban kiểm soát') ? 'Thành viên BKS'
       : has('trưởng phòng') ? 'Trưởng phòng' : has('phó phòng') ? 'Phó phòng' : list.length ? 'Nhân viên' : '';
   }
-  if (kind === 'plant') { const k = normT(t); if (k === 'trưởng phòng' && st.plant_title_head) return st.plant_title_head; if (k === 'phó phòng' && st.plant_title_deputy) return st.plant_title_deputy; }
+  if (kind === 'plant') {
+    const k = normT(t);
+    if ((k === 'trưởng phòng' || k === 'giám đốc nhà máy') && st.plant_title_head) return st.plant_title_head;
+    if ((k === 'phó phòng' || k === 'p. giám đốc nhà máy') && st.plant_title_deputy) return st.plant_title_deputy;
+  }
   return t;
 }
-module.exports = { extractTitle, TITLE_CANON, dispPositions, posRank, looksLead, looksWorker, cleanName, isExcluded, parsePatterns };
+// Chức danh của một người (e: positions, title, is_lead, shift_no, title_manual): chức danh sửa tay ưu tiên nhất;
+// trưởng ca = "Trưởng ca"; có kíp (không phải trưởng ca) = "ĐHV"; còn lại theo SSO (dispPositions, có đổi tên ở nhà máy).
+function posTitle(e, kind, st = {}) {
+  const m = String(e?.title_manual || '').trim();
+  if (m) return m;
+  if (e?.is_lead) return 'Trưởng ca';
+  if (e?.shift_no) return 'ĐHV';
+  return dispPositions(e?.positions, kind, st, e?.title);
+}
+module.exports = { extractTitle, TITLE_CANON, dispPositions, posTitle, posRank, looksLead, looksWorker, cleanName, isExcluded, parsePatterns };

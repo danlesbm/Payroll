@@ -9,7 +9,7 @@ const { recalcIfExists, autoCalc } = require('../services/payroll');
 const { safetyHolders } = require('../services/safety');
 const { monthEnd } = require('../lib/dates');
 const sched = require('../services/schedule');
-const { dispPositions } = require('../lib/names');
+const { posTitle } = require('../lib/names');
 
 const VIEW_ROLES = ['timekeeper', 'l1', 'l2', 'l3', 'director', 'view_att'];
 // Các bước ở cấp bảng chấm công (người chấm, cấp 1, trả lại). Từ cấp 2 trở lên làm ở trang Bảng lương (theo cả bảng lương).
@@ -90,7 +90,7 @@ router.get('/:sheetId/:year/:month', api(async req => {
     const p = open ? await ensurePeriod(c, sheetId, year, month) : (await q(c, 'SELECT * FROM periods WHERE sheet_id=$1 AND year=$2 AND month=$3', [sheetId, year, month]))[0];
     return {
       p,
-      employees: await q(c, `SELECT ve.id, ve.full_name, ve.employee_code, ve.positions, ve.title, ve.employee_type, ve.shift_no, ve.is_lead, ve.department_name, ve.weekly_off, ve.pay_dept_id, ve.department_id AS att_dept_id, (SELECT d.meal_mode FROM departments d WHERE d.id=ve.department_id) AS meal_mode FROM period_employees pe JOIN v_employees ve ON ve.id=pe.employee_id
+      employees: await q(c, `SELECT ve.id, ve.full_name, ve.employee_code, ve.positions, ve.title, ve.title_manual, ve.employee_type, ve.shift_no, ve.is_lead, ve.department_name, ve.weekly_off, ve.pay_dept_id, ve.department_id AS att_dept_id, (SELECT d.meal_mode FROM departments d WHERE d.id=ve.department_id) AS meal_mode FROM period_employees pe JOIN v_employees ve ON ve.id=pe.employee_id
         WHERE pe.period_id=$1 ORDER BY ve.department_sort NULLS LAST, ve.department_name NULLS LAST, ve.emp_order, ve.sort_order, ve.full_name`, [p.id]),
       entries: await q(c, 'SELECT employee_id, day, code FROM attendance_entries WHERE period_id=$1', [p.id]),
       original: await q(c, 'SELECT employee_id, day, code FROM attendance_original WHERE period_id=$1', [p.id]),
@@ -101,7 +101,7 @@ router.get('/:sheetId/:year/:month', api(async req => {
   const { p } = data;
   // Chức danh hiển thị (giống bảng lương)
   const stT = Object.fromEntries((await rows("SELECT key, value FROM settings WHERE key IN ('plant_title_head','plant_title_deputy')")).map(r => [r.key, r.value]));
-  data.employees.forEach(e => { e.pos_disp = dispPositions(e.positions, sheet.group_kind, stT, e.title); });
+  data.employees.forEach(e => { e.pos_disp = posTitle(e, sheet.group_kind, stT); });
   if (vs.depts) {   // người chỉ có quyền theo bộ phận: chỉ thấy nhân sự của các bộ phận đó
     const ok = new Set(data.employees.filter(e => vs.depts.has(String(e.att_dept_id))).map(e => e.id));
     data.employees = data.employees.filter(e => ok.has(e.id));

@@ -12,7 +12,7 @@ const pad = v => String(v).padStart(2, '0');
 const DEFAULT_SIGN = { pay: ['Giám đốc', 'Kế toán trưởng', 'Người lập biểu'], att: ['Giám đốc', 'Phụ trách bộ phận', 'Người chấm công'] };
 
 async function settings(c) { return Object.fromEntries((await q(c, 'SELECT key, value FROM settings')).map(r => [r.key, r.value])); }
-const { dispPositions } = require('../lib/names');
+const { posTitle } = require('../lib/names');
 const signersOf = (list, kind) => (Array.isArray(list) && list.length ? list : DEFAULT_SIGN[kind].map(title => ({ title, name: '' })));
 
 // ---------- khung chung ----------
@@ -92,12 +92,12 @@ async function payrollData(c, groupId, year, month) {
   const group = (await q(c, 'SELECT id, name, signers, kind FROM groups WHERE id=$1', [groupId]))[0];
   const run = (await q(c, 'SELECT * FROM payroll_runs WHERE group_id=$1 AND year=$2 AND month=$3', [groupId, year, month]))[0];
   if (!run) { const e = new Error('Chưa có bảng lương tháng này — hãy chạy lương nháp trước khi xuất.'); e.status = 404; throw e; }
-  const lines = await q(c, `SELECT pl.*, e.full_name, e.employee_code, e.positions, e.title, e.employee_type, e.shift_no, e.is_lead, v.pay_department_name, v.pay_department_sort
+  const lines = await q(c, `SELECT pl.*, e.full_name, e.employee_code, e.positions, e.title, e.title_manual, e.employee_type, e.shift_no, e.is_lead, v.pay_department_name, v.pay_department_sort
     FROM payroll_lines pl JOIN employees e ON e.id=pl.employee_id LEFT JOIN v_employees v ON v.id=e.id WHERE pl.run_id=$1
     ORDER BY v.pay_department_sort NULLS LAST, v.pay_department_name, v.emp_order, e.sort_order, e.full_name`, [run.id]);
   const coefTypes = await q(c, 'SELECT code, name, kind, is_total FROM coefficient_types WHERE active ORDER BY sort_order, code');
   const dedTypes = await q(c, 'SELECT code, name FROM deduction_types ORDER BY sort_order, code');
-  const st = await settings(c); lines.forEach(l => { l.positions = dispPositions(l.positions, group.kind, st, l.title); });
+  const st = await settings(c); lines.forEach(l => { l.positions = posTitle(l, group.kind, st); });
   return { group, run, lines, coefTypes, dedTypes, st };
 }
 const title = (what, group, year, month) => [`${what} ${String(group.name).toUpperCase()}`, `THÁNG ${pad(month)} NĂM ${year}`];
@@ -168,11 +168,11 @@ async function coefXlsx(c, groupId, year, month) {
   const end = monthEnd(year, month), st = await settings(c);
   const run = (await q(c, 'SELECT id, calculated_by FROM payroll_runs WHERE group_id=$1 AND year=$2 AND month=$3', [groupId, year, month]))[0];
   const emps = run
-    ? await q(c, `SELECT e.id, e.full_name, e.positions, e.title, e.employee_type, e.shift_no, v.pay_department_name, v.pay_department_sort, e.sort_order FROM payroll_lines pl JOIN employees e ON e.id=pl.employee_id LEFT JOIN v_employees v ON v.id=e.id WHERE pl.run_id=$1 ORDER BY v.pay_department_sort NULLS LAST, v.pay_department_name, v.emp_order, e.sort_order, e.full_name`, [run.id])
-    : await q(c, `SELECT id, full_name, positions, title, employee_type, shift_no, pay_department_name, pay_department_sort, sort_order FROM v_employees WHERE group_id=$1 AND sso_status='active' AND payroll_active ORDER BY pay_department_sort NULLS LAST, pay_department_name, emp_order, sort_order, full_name`, [groupId]);
+    ? await q(c, `SELECT e.id, e.full_name, e.positions, e.title, e.title_manual, e.is_lead, e.employee_type, e.shift_no, v.pay_department_name, v.pay_department_sort, e.sort_order FROM payroll_lines pl JOIN employees e ON e.id=pl.employee_id LEFT JOIN v_employees v ON v.id=e.id WHERE pl.run_id=$1 ORDER BY v.pay_department_sort NULLS LAST, v.pay_department_name, v.emp_order, e.sort_order, e.full_name`, [run.id])
+    : await q(c, `SELECT id, full_name, positions, title, title_manual, is_lead, employee_type, shift_no, pay_department_name, pay_department_sort, sort_order FROM v_employees WHERE group_id=$1 AND sso_status='active' AND payroll_active ORDER BY pay_department_sort NULLS LAST, pay_department_name, emp_order, sort_order, full_name`, [groupId]);
   const hist = await q(c, `SELECT DISTINCT ON (employee_id) employee_id, vals, effective_from FROM coefficient_history WHERE employee_id = ANY($1::uuid[]) AND effective_from <= $2 ORDER BY employee_id, effective_from DESC, id DESC`, [emps.map(e => e.id), end]);
   const hm = new Map(hist.map(h => [h.employee_id, h]));
-  const rows = emps.map(e => ({ ...e, positions: dispPositions(e.positions, group.kind, st, e.title), vals: hm.get(e.id)?.vals || {}, eff: hm.get(e.id)?.effective_from || '' }));
+  const rows = emps.map(e => ({ ...e, positions: posTitle(e, group.kind, st), vals: hm.get(e.id)?.vals || {}, eff: hm.get(e.id)?.effective_from || '' }));
   const types = await q(c, 'SELECT code, name, kind, is_total FROM coefficient_types WHERE active ORDER BY sort_order, code');
   const ins = types.filter(t => t.kind === 'insurance'), bon = types.filter(t => t.kind === 'bonus' && !t.is_total), totT = types.filter(t => t.kind === 'bonus' && t.is_total), amt = types.filter(t => t.kind === 'amount');
   const sumOf = list => l => list.reduce((s, t) => s + n(l.vals[t.code]), 0);
@@ -206,7 +206,7 @@ async function mealXlsx(c, groupId, year, month) {
     ...(anyWait ? [{ h: 'Ăn chờ ca', g: 'Số công / suất ăn ca', w: 12, fmt: '#,##0.##', sum: true, val: x => x.waitQty }] : []),
     { h: 'Tiền ăn', w: 15, fmt: MONEY, sum: true, val: x => x.amount }, { h: 'Ghi chú', w: 40, val: note }
   ];
-  rep.rows.forEach(x => { x.positions = dispPositions(x.positions, group.kind, st, x.title); });
+  rep.rows.forEach(x => { x.positions = posTitle(x, group.kind, st); });
   const sorted = [...rep.rows].sort((a, b) => (a.departmentSort ?? 1e9) - (b.departmentSort ?? 1e9));
   const wb = new Workbook(), ws = wb.sheet('Ăn ca');
   let r = head(ws, cols.length, st.company_name, [`DANH SÁCH CHI TIỀN ĂN CA ${String(group.name).toUpperCase()}`, `THÁNG ${pad(month)} NĂM ${year}`]);
@@ -253,7 +253,7 @@ async function attendanceXlsx(c, sheetIds, year, month) {
     const sh = (await q(c, 'SELECT s.id, s.name, s.signers, s.print_title, s.use_safety, s.use_labor, s.group_id, g.kind AS group_kind FROM sheets s LEFT JOIN groups g ON g.id=s.group_id WHERE s.id=$1', [sid]))[0]; if (!sh) continue;
     const rat = {}; for (const x of await q(c, 'SELECT pr.employee_id, pr.safety, pr.labor FROM period_ratings pr JOIN periods p ON p.id=pr.period_id WHERE p.sheet_id=$1 AND p.year=$2 AND p.month=$3', [sid, year, month])) rat[x.employee_id] = x;
     const p = (await q(c, 'SELECT id, status FROM periods WHERE sheet_id=$1 AND year=$2 AND month=$3', [sid, year, month]))[0]; if (!p) continue;
-    const emps = await q(c, `SELECT ve.id, ve.full_name, ve.positions, ve.title, ve.employee_type, ve.shift_no, ve.department_name, ve.department_sort, ve.weekly_off, ve.pay_dept_id FROM period_employees pe JOIN v_employees ve ON ve.id=pe.employee_id WHERE pe.period_id=$1
+    const emps = await q(c, `SELECT ve.id, ve.full_name, ve.positions, ve.title, ve.title_manual, ve.is_lead, ve.employee_type, ve.shift_no, ve.department_name, ve.department_sort, ve.weekly_off, ve.pay_dept_id FROM period_employees pe JOIN v_employees ve ON ve.id=pe.employee_id WHERE pe.period_id=$1
       ORDER BY ve.department_sort NULLS LAST, ve.department_name NULLS LAST, ve.emp_order, ve.sort_order, ve.full_name`, [p.id]);
     const holders = await safetyHolders(c, emps.map(e => e.id), monthEnd(year, month));
     const extraCols = [...(sh.use_safety || holders.size ? [['An toàn', 'safety']] : []), ...(sh.use_labor ? [['Xếp loại', 'labor']] : [])];
@@ -283,7 +283,7 @@ async function attendanceXlsx(c, sheetIds, year, month) {
       }
       let dsum = 0, nsum = 0;
       const sc = require('./schedule').forEmployee(sctx, { groupId: sh.group_id, departmentId: e.pay_dept_id, employeeType: e.employee_type, weeklyOff: e.weekly_off });
-      ws.set(r, 1, ++k, { border: true, al: 'center' }); ws.set(r, 2, e.full_name, { border: true }); ws.set(r, 3, dispPositions(e.positions, sh.group_kind, st, e.title) || '', { border: true, wrap: true, sz: 10 });
+      ws.set(r, 1, ++k, { border: true, al: 'center' }); ws.set(r, 2, e.full_name, { border: true }); ws.set(r, 3, posTitle(e, sh.group_kind, st) || '', { border: true, wrap: true, sz: 10 });
       for (let d = 1; d <= days; d++) {
         const cd = ent[e.id]?.[d] || '', w = new Date(Date.UTC(year, month - 1, d)).getUTCDay();
         if (cd && work[cd] && !(work[cd].off_day_zero && sc.offSet.has(d))) { dsum += n(work[cd].work_day); nsum += n(work[cd].work_night); }

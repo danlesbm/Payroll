@@ -5,7 +5,7 @@ const q = (c, sql, p) => c.query(sql, p).then(r => r.rows);
 async function mealReport(c, groupId, year, month) {
   const end = monthEnd(year, month);
   const [emps, entries, actual, cmPrices, rates, types] = await Promise.all([
-    q(c, `SELECT ve.id, ve.full_name, ve.employee_code, ve.positions, ve.title, ve.employee_type, ve.shift_no, ve.pay_department_name AS department_name, ve.pay_department_sort AS department_sort, s.name AS sheet_name, (SELECT d.meal_mode FROM departments d WHERE d.id=ve.department_id) AS meal_mode
+    q(c, `SELECT ve.id, ve.full_name, ve.employee_code, ve.positions, ve.title, ve.title_manual, ve.is_lead, ve.employee_type, ve.shift_no, ve.pay_department_name AS department_name, ve.pay_department_sort AS department_sort, s.name AS sheet_name, (SELECT d.meal_mode FROM departments d WHERE d.id=ve.department_id) AS meal_mode
           FROM period_employees pe JOIN periods p ON p.id=pe.period_id JOIN sheets s ON s.id=p.sheet_id JOIN v_employees ve ON ve.id=pe.employee_id
           WHERE s.group_id=$1 AND p.year=$2 AND p.month=$3
           ORDER BY ve.pay_department_sort NULLS LAST, ve.pay_department_name, ve.emp_order, ve.sort_order, ve.full_name`, [groupId, year, month]),
@@ -29,7 +29,7 @@ async function mealReport(c, groupId, year, month) {
     amount += calc.mealAmount(qty, rateBy);
     for (const [t, v] of Object.entries(qty)) { if (isWait[t]) waitQty += calc.num(v); else actualQty += calc.num(v); }
     total += amount;
-    out.push({ employee_type: e.employee_type, shift_no: e.shift_no, employeeId: e.id, name: e.full_name, code: e.employee_code, positions: e.positions, title: e.title, department: e.department_name, departmentSort: e.department_sort, sheet: e.sheet_name, mode, qty, codes, days, actualQty, waitQty, amount });
+    out.push({ employee_type: e.employee_type, shift_no: e.shift_no, employeeId: e.id, name: e.full_name, code: e.employee_code, positions: e.positions, title: e.title, title_manual: e.title_manual, is_lead: e.is_lead, department: e.department_name, departmentSort: e.department_sort, sheet: e.sheet_name, mode, qty, codes, days, actualQty, waitQty, amount });
   }
   return { types, rows: out, total };
 }

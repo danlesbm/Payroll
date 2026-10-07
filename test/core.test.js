@@ -170,6 +170,21 @@ test('chức danh hiển thị ở nhà máy', () => {
   assert.equal(dispPositions('Phó phòng, Nhân viên', 'plant', st), 'P. Giám đốc nhà máy');
   assert.equal(dispPositions('Trưởng phòng', 'office', st), 'Trưởng phòng');
   assert.equal(dispPositions('Trưởng phòng', 'plant', { plant_title_head: '' }), 'Trưởng phòng');
+  // chức danh gõ trong tên SSO "Giám đốc nhà máy" cũng theo tên cài đặt ở nhà máy
+  assert.equal(dispPositions('Trưởng phòng', 'plant', { plant_title_head: 'Giám đốc NM' }, 'Giám đốc nhà máy'), 'Giám đốc NM');
+  assert.equal(dispPositions('Phó phòng', 'plant', { plant_title_deputy: 'P. Giám đốc NM' }, 'P. Giám đốc nhà máy'), 'P. Giám đốc NM');
+});
+
+test('chức danh theo người: sửa tay > trưởng ca > có kíp (ĐHV) > SSO', () => {
+  const { posTitle } = require('../src/lib/names');
+  const st = { plant_title_head: 'Giám đốc NM', plant_title_deputy: 'P. Giám đốc NM' };
+  assert.equal(posTitle({ positions: 'Nhân viên', is_lead: true, shift_no: 1 }, 'plant', st), 'Trưởng ca');
+  assert.equal(posTitle({ positions: 'Nhân viên', is_lead: false, shift_no: 2 }, 'plant', st), 'ĐHV');
+  assert.equal(posTitle({ positions: 'Nhân viên', shift_no: null }, 'plant', st), 'Nhân viên');
+  assert.equal(posTitle({ positions: 'Trưởng phòng' }, 'plant', st), 'Giám đốc NM');
+  assert.equal(posTitle({ positions: 'Phó phòng' }, 'plant', st), 'P. Giám đốc NM');
+  assert.equal(posTitle({ positions: 'Nhân viên', is_lead: true, shift_no: 1, title_manual: ' Kỹ thuật viên ' }, 'plant', st), 'Kỹ thuật viên');
+  assert.equal(posTitle({ positions: 'Nhân viên', shift_no: 1, title_manual: '  ' }, 'plant', st), 'ĐHV');
 });
 
 test('lương cơ sở: mức riêng theo loại nhân sự ưu tiên hơn mức chung, theo ngày hiệu lực', () => {

@@ -5,6 +5,7 @@ const { bad, isUuid, str, api, forbid } = require('../lib/http');
 const { ROLES, SCOPES_OF } = require('../lib/permissions');
 const { syncDirectory, normalizeShifts } = require('../sso');
 const { isEmpType } = require('../lib/emptypes');
+const { posTitle } = require('../lib/names');
 
 // Quản lý nhân sự: Admin hoặc người có quyền "people" (toàn hệ thống)
 const needPeople = req => { if (!req.auth.isAdmin && !req.auth.can('people', {})) forbid('Chỉ Admin hoặc người được phân quyền "Quản lý nhân sự" mới thực hiện được'); };
@@ -19,17 +20,22 @@ router.get('/employees', api(async req => {
   if (isUuid(departmentId)) { p.push(departmentId); w.push(`v.department_id=$${p.length}`); }
   if (unassigned === '1') w.push('v.department_id IS NULL');
   else if (!everyone) w.push('v.department_id IS NOT NULL');   // người chưa thuộc phòng nào: ẩn khỏi màn cấu hình (chỉ dùng everyone=1 khi gán quyền)
-  return { employees: await rows(`SELECT v.id, v.sso_user_id, v.employee_code, v.full_name, v.email, v.positions, v.employee_type, v.weekly_off, v.allowance_group_id, v.shift_no, v.is_lead, v.type_locked, v.pos_rank, v.sso_status, v.payroll_active,
+  const stT = Object.fromEntries((await rows("SELECT key, value FROM settings WHERE key IN ('plant_title_head','plant_title_deputy')")).map(r => [r.key, r.value]));
+  const list = await rows(`SELECT v.id, v.sso_user_id, v.employee_code, v.full_name, v.email, v.positions, v.title, v.title_manual, v.group_kind, v.employee_type, v.weekly_off, v.allowance_group_id, v.shift_no, v.is_lead, v.type_locked, v.pos_rank, v.sso_status, v.payroll_active,
       v.sort_order, v.mapped_department_id, v.override_department_id, v.department_id, v.department_name, v.pay_department_name, v.pay_dept_id, v.sheet_name, v.group_name, v.sso_dept_ids
     FROM v_employees v ${w.length ? 'WHERE ' + w.join(' AND ') : ''}
-    ORDER BY v.group_name NULLS LAST, v.department_sort NULLS LAST, v.department_name NULLS LAST, v.emp_order, v.sort_order, v.full_name LIMIT 3000`, p) };
+    ORDER BY v.group_name NULLS LAST, v.department_sort NULLS LAST, v.department_name NULLS LAST, v.emp_order, v.sort_order, v.full_name LIMIT 3000`, p);
+  // auto_title: chức danh tự động (khi chưa sửa tay) để hiện gợi ý ở ô Chức danh
+  // sso_title: chức danh theo SSO (bỏ qua kíp / trưởng ca) — để màn hình đổi gợi ý ngay khi tick trưởng ca / chọn kíp
+  return { employees: list.map(e => ({ ...e, auto_title: posTitle({ ...e, title_manual: null }, e.group_kind, stT), sso_title: posTitle({ ...e, title_manual: null, is_lead: false, shift_no: null }, e.group_kind, stT) })) };
 }));
 
 // ---- Dùng chung: dựng câu lệnh UPDATE từ các trường được phép; chụp ảnh trạng thái cũ để hoàn tác ----
-const SNAP_COLS = ['employee_code', 'employee_type', 'shift_no', 'is_lead', 'allowance_group_id', 'weekly_off', 'payroll_active', 'sort_order', 'override_department_id', 'type_locked'];
+const SNAP_COLS = ['employee_code', 'employee_type', 'shift_no', 'is_lead', 'allowance_group_id', 'weekly_off', 'payroll_active', 'sort_order', 'override_department_id', 'type_locked', 'title_manual'];
 function buildSets(b, p) {
   const sets = [], add = (col, v) => { p.push(v); sets.push(`${col}=$${p.length}`); };
   if ('employee_code' in b) add('employee_code', str(b.employee_code) || null);
+  if ('title_manual' in b) add('title_manual', String(b.title_manual ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) || null);   // trống = theo chức danh tự động
   if ('employee_type' in b) { if (!isEmpType(b.employee_type)) bad('Loại nhân sự không hợp lệ'); add('employee_type', b.employee_type); }
   if ('shift_no' in b) { const n = b.shift_no === '' || b.shift_no === null ? null : Math.trunc(Number(b.shift_no)); if (n !== null && !(n >= 1 && n <= 20)) bad('Kíp phải từ 1 đến 20'); add('shift_no', n); }
   if ('is_lead' in b) add('is_lead', b.is_lead === true || b.is_lead === 'true');
@@ -124,7 +130,8 @@ router.post('/employees-undo', api(async req => {
   const list = s.rows;
   await tx(async c => {
     for (const r of list) {
-      const p = [r.id], sets = SNAP_COLS.map(col => { p.push(r[col] === undefined ? null : r[col]); return `${col}=$${p.length}`; });
+      // ảnh chụp cũ (trước khi có cột title_manual…) không có cột đó: giữ nguyên giá trị hiện tại thay vì xoá
+      const p = [r.id], sets = SNAP_COLS.filter(col => col in r).map(col => { p.push(r[col]); return `${col}=$${p.length}`; });
       await c.query(`UPDATE employees SET ${sets.join(',')}, updated_at=now() WHERE id=$1`, p);
     }
     await c.query('UPDATE employee_snapshots SET undone_at=now() WHERE id=$1', [s.id]);

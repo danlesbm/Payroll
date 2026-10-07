@@ -6,7 +6,8 @@ const { bad, isUuid, str, api, forbid, sendXlsx } = require('../lib/http');
 const { Workbook } = require('../lib/xlsx');
 const { nowVN } = require('../lib/dates');
 const G = require('../services/grades');
-const { dispPositions } = require('../lib/names');
+const { posTitle } = require('../lib/names');
+const titleSettings = async () => Object.fromEntries((await rows("SELECT key, value FROM settings WHERE key IN ('plant_title_head','plant_title_deputy')")).map(r => [r.key, r.value]));
 
 const PAY_ROLES = ['l2', 'l3', 'director', 'hr', 'view_pay'];
 const pad = n => String(n).padStart(2, '0');
@@ -22,7 +23,7 @@ async function scopeEmployees(req, { groupId, departmentId, q } = {}) {
   if (isUuid(groupId)) { p.push(groupId); w.push(`v.group_id=$${p.length}`); }
   if (isUuid(departmentId)) { p.push(departmentId); w.push(`v.pay_dept_id=$${p.length}`); }
   if (str(q)) { p.push('%' + str(q).toLowerCase() + '%'); w.push(`lower(v.full_name) LIKE $${p.length}`); }
-  const list = await rows(`SELECT v.id, v.full_name, v.employee_code, v.positions, v.title, v.employee_type, v.group_id, v.sheet_id, v.group_name, v.group_kind, v.pay_department_name AS dept
+  const list = await rows(`SELECT v.id, v.full_name, v.employee_code, v.positions, v.title, v.title_manual, v.is_lead, v.shift_no, v.employee_type, v.group_id, v.sheet_id, v.group_name, v.group_kind, v.pay_department_name AS dept
     FROM v_employees v WHERE ${w.join(' AND ')} ORDER BY v.group_name, v.pay_department_sort NULLS LAST, v.pay_department_name, v.emp_order, v.sort_order, v.full_name`, p);
   return list.filter(e => req.auth.canAny(PAY_ROLES, { groupId: e.group_id, sheetId: e.sheet_id }));
 }
@@ -114,12 +115,12 @@ router.get('/coef-changes/export', async (req, res) => {
 
 // ===== Đến hạn tăng bậc =====
 async function dueList(req, q) {
-  const emps = await scopeEmployees(req, q), today = todayStr();
+  const emps = await scopeEmployees(req, q), today = todayStr(), stT = await titleSettings();
   const st = await G.states(today, emps.map(e => e.id));
   const from = dateOk(q.from) || '1900-01-01', to = dateOk(q.to) || '2999-12-31';
   const all = emps.map(e => ({ e, s: st.get(e.id) }));
   const list = all.filter(x => x.s?.grade && x.s.due && x.s.due >= from && x.s.due <= to).map(({ e, s }) => ({
-    employee_id: e.id, name: e.full_name, code: e.employee_code, dept: e.dept, group: e.group_name, position: dispPositions(e.positions, e.group_kind, {}, e.title),
+    employee_id: e.id, name: e.full_name, code: e.employee_code, dept: e.dept, group: e.group_name, position: posTitle(e, e.group_kind, stT),
     label: s.label, scale: s.scale, grade: s.grade, since: s.since, months: s.months, due: s.due, days_left: G.daysBetween(today, s.due), overdue: s.due < today,
     cur_coef: s.curCoef, grade_coef: s.gradeCoef, next_grade: s.nextGrade, next_coef: s.nextCoef })).sort((a, b) => a.due.localeCompare(b.due) || a.name.localeCompare(b.name, 'vi'));
   const overdueAll = all.filter(x => x.s?.due && x.s.due < today).length;
