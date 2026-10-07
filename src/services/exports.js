@@ -108,8 +108,8 @@ async function salaryXlsx(c, groupId, year, month) {
   const dedCols = d.dedTypes.filter(t => d.lines.some(l => (l.detail.deductions || []).some(x => x.code === t.code)));
   const hasExtra = d.lines.some(l => n(l.detail.monthlyDeduction) > 0), hasLabor = d.lines.some(l => l.detail.laborGrade), hasSafety = d.lines.some(l => l.detail.safetyGrade);
   const lineOf = l => l;
-  const premS = l => n(l.night_salary) + n(l.extra_salary) + n(l.holiday_salary);
-  const hasPrem = d.lines.some(l => premS(l) > 0);
+  // Tiền làm đêm / làm thêm / làm lễ (cả phần theo hệ số lương) nằm ở bảng thưởng; bảng lương chỉ đến lương đóng bảo hiểm.
+  // Áp dụng cả cho bảng lương tính trước v6.20 (chưa "Tính lại"): tổng lương + thưởng của mỗi người không đổi.
   const cols = [
     { h: 'TT', w: 5, tt: true, val: () => '' }, { h: 'Họ và tên', w: 26, val: l => l.full_name }, { h: 'Chức vụ', w: 14, val: l => l.positions || '' },
     { h: 'Số công tiêu chuẩn (Ntc)', w: 10, fmt: 'General', sum: true, val: l => n(l.detail.standardDays) }, { h: 'Số công thực tế (Ntt)', w: 10, fmt: 'General', sum: true, val: l => n(l.work_days) },
@@ -118,12 +118,11 @@ async function salaryXlsx(c, groupId, year, month) {
     ...(hasSafety ? [{ h: 'Xếp loại an toàn', w: 9, val: l => l.detail.safetyGrade || '' }] : []),
     { h: 'Phụ cấp', w: 12, fmt: MONEY, sum: true, val: l => n(l.allowance) },
     { h: 'Tiền lương', w: 14, fmt: MONEY, sum: true, val: l => n(l.insurance_salary) },
-    ...(hasPrem ? [{ h: 'Làm đêm', g: 'Tiền làm đêm, làm thêm, làm lễ', w: 13, fmt: MONEY, sum: true, val: l => n(l.night_salary) }, { h: 'Làm thêm / sửa chữa', g: 'Tiền làm đêm, làm thêm, làm lễ', w: 13, fmt: MONEY, sum: true, val: l => n(l.extra_salary) }, { h: 'Làm lễ, tết', g: 'Tiền làm đêm, làm thêm, làm lễ', w: 13, fmt: MONEY, sum: true, val: l => n(l.holiday_salary) }] : []),
-    { h: 'Tổng tiền lương và phụ cấp', w: 15, fmt: MONEY, sum: true, val: l => n(l.insurance_salary) + premS(l) + n(l.allowance) },
+    { h: 'Tổng tiền lương và phụ cấp', w: 15, fmt: MONEY, sum: true, val: l => n(l.insurance_salary) + n(l.allowance) },
     ...dedCols.map(t => ({ h: t.name, g: 'Các khoản khấu trừ vào lương', w: 13, fmt: MONEY, sum: true, val: l => n((l.detail.deductions || []).find(x => x.code === t.code)?.amount) })),
     ...(hasExtra ? [{ h: 'Khoản trừ khác trong tháng', g: 'Các khoản khấu trừ vào lương', w: 13, fmt: MONEY, sum: true, val: l => n(l.detail.monthlyDeduction) }] : []),
     { h: 'Tổng khấu trừ', w: 13, fmt: MONEY, sum: true, val: l => n(l.deduction) },
-    { h: 'Lương thực lĩnh', w: 15, fmt: MONEY, sum: true, val: l => n(l.insurance_salary) + premS(l) + n(l.allowance) - n(l.deduction) },
+    { h: 'Lương thực lĩnh', w: 15, fmt: MONEY, sum: true, val: l => n(l.insurance_salary) + n(l.allowance) - n(l.deduction) },
     { h: 'Ký nhận', w: 14, val: () => '' }
   ];
   let r = head(ws, cols.length, d.st.company_name, title('BẢNG THANH TOÁN LƯƠNG', d.group, year, month));
@@ -136,7 +135,8 @@ async function bonusXlsx(c, groupId, year, month) {
   const d = await payrollData(c, groupId, year, month);
   const wb = new Workbook(), ws = wb.sheet('Thưởng');
   const bonusTypes = d.coefTypes.filter(t => t.kind === 'bonus' && !t.is_total);
-  const premB = l => n(l.night_bonus) + n(l.extra_bonus) + n(l.holiday_bonus), hasPremB = d.lines.some(l => premB(l) > 0);
+  const pN = l => n(l.night_salary) + n(l.night_bonus), pE = l => n(l.extra_salary) + n(l.extra_bonus), pH = l => n(l.holiday_salary) + n(l.holiday_bonus);
+  const premB = l => pN(l) + pE(l) + pH(l), hasPremB = d.lines.some(l => premB(l) > 0);
   const hasLabor = d.lines.some(l => l.detail.laborGrade), hasMonthly = d.lines.some(l => n(l.detail.monthlyBonus) !== 0), hasBonusDed = d.lines.some(l => n(l.detail.bonusDeduction) !== 0);
   const labels = [...new Set(d.lines.flatMap(l => (l.detail.extras || []).filter(x => x.kind === 'bonus_deduction').map(x => x.label)))];
   const cols = [
@@ -148,7 +148,7 @@ async function bonusXlsx(c, groupId, year, month) {
     ...(hasLabor ? [{ h: 'Xếp loại LĐ', w: 9, al: 'center', val: l => l.detail.laborGrade || '' }, { h: 'Hệ số xếp loại', w: 9, fmt: COEF, val: l => n(l.detail.laborFactor ?? 1) }] : []),
     { h: 'Thưởng theo hệ số', w: 14, fmt: MONEY, sum: true, val: l => n(l.detail.bonusBase) },
     ...(hasMonthly ? [{ h: 'Thưởng tháng', w: 14, fmt: MONEY, sum: true, val: l => n(l.detail.monthlyBonus) }] : []),
-    ...(hasPremB ? [{ h: 'Làm đêm', g: 'Thưởng làm đêm, làm thêm, làm lễ', w: 13, fmt: MONEY, sum: true, val: l => n(l.night_bonus) }, { h: 'Làm thêm / sửa chữa', g: 'Thưởng làm đêm, làm thêm, làm lễ', w: 13, fmt: MONEY, sum: true, val: l => n(l.extra_bonus) }, { h: 'Làm lễ, tết', g: 'Thưởng làm đêm, làm thêm, làm lễ', w: 13, fmt: MONEY, sum: true, val: l => n(l.holiday_bonus) }] : []),
+    ...(hasPremB ? [{ h: 'Làm đêm', g: 'Thưởng làm đêm, làm thêm, làm lễ', w: 13, fmt: MONEY, sum: true, val: pN }, { h: 'Làm thêm / sửa chữa', g: 'Thưởng làm đêm, làm thêm, làm lễ', w: 13, fmt: MONEY, sum: true, val: pE }, { h: 'Làm lễ, tết', g: 'Thưởng làm đêm, làm thêm, làm lễ', w: 13, fmt: MONEY, sum: true, val: pH }] : []),
     { h: 'Tiền thưởng', w: 14, fmt: MONEY, sum: true, val: l => n(l.bonus) + premB(l) },
     ...labels.map(lb => ({ h: lb, g: 'Trừ vào thưởng', w: 13, fmt: MONEY, sum: true, val: l => (l.detail.extras || []).filter(x => x.kind === 'bonus_deduction' && x.label === lb).reduce((s, x) => s + n(x.amount), 0) })),
     ...(labels.length || !hasBonusDed ? [] : [{ h: 'Khoản trừ vào thưởng', w: 13, fmt: MONEY, sum: true, val: l => n(l.detail.bonusDeduction) }]),

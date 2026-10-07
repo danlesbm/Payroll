@@ -19,4 +19,4 @@ Chép thư mục `payroll/` đè lên (KHÔNG đụng `.env` / `docker-compose.y
 - Phần tiền đó (tính theo hệ số lương) được cộng vào 3 cột **Làm đêm / Làm thêm, sửa chữa / Làm lễ, tết** của bảng thưởng, cùng với phần theo hệ số thưởng → một bảng thưởng duy nhất.
 - Tổng thực lĩnh (lương + thưởng + ăn ca) không đổi; khấu trừ bảo hiểm vẫn tính trên lương bảo hiểm như cũ.
 - Chi tiết dòng lương và phiếu lương ghi rõ mỗi khoản thưởng làm đêm/thêm/lễ gồm bao nhiêu theo hệ số lương, bao nhiêu theo hệ số thưởng.
-- Bảng lương đã khoá giữ nguyên cách cũ; bảng nháp cần bấm **Tính lại**.
+- File Excel bảng lương / bảng thưởng luôn theo cách mới, kể cả bảng tính trước bản này (tổng lương + thưởng của mỗi người không đổi). Màn hình chi tiết của bảng nháp cần bấm **Tính lại** để hiện đúng.
