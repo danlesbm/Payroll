@@ -16,6 +16,6 @@
 //  Cả hai: tiền làm đêm 30% (cột Làm đêm) như nhau; ký hiệu LT, sửa chữa… như nhau.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
-const PREMIUM_METHOD = 'B';
+const PREMIUM_METHOD = 'A';
 
 module.exports = { PREMIUM_METHOD };
