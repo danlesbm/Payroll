@@ -1,45 +1,43 @@
-# Hai nhánh code: `v6.19` (phương án B) và `theo-tt` (phương án A)
+# Phương pháp tính tiền làm lễ, làm thêm và các nhánh dự phòng
 
-## Khác nhau ở đâu
-Hai nhánh giống hệt nhau, **chỉ khác 1 dòng** trong `src/lib/premium-method.js`:
+## Nhánh chính `v6.19`: chọn trong Cấu hình
+Admin › Cấu hình › thẻ **Phương pháp tính tiền làm lễ, làm thêm**. Lưu ở `settings.premium_method` (`A` / `B`, mặc định `B`).
+Đổi xong bấm **Tính lại** các bảng lương nháp; bảng đã khoá giữ số cũ. Popup chi tiết từng người ghi rõ đang tính theo phương pháp nào (dòng Làm lễ, tết).
 
-| Nhánh | Dòng | Ý nghĩa |
+Code: `src/lib/premium-method.js` (tên, mặc định, hằng số 20%), `src/lib/workdays.js` → `premiumDays`, `src/lib/calc.js` → `calcLine`, `src/services/payroll.js` đọc cài đặt.
+
+## Hai phương pháp
+Chỉ khác ở **tiền làm lễ, tết** và **tiền công vượt chuẩn** khi có ca đêm. Lương, thưởng, tiền làm đêm 30%, bảo hiểm, ăn ca, ký hiệu LT, phụ cấp sửa chữa như nhau.
+
+Đơn giá ngày = (lương bảo hiểm + phụ cấp + thưởng) ÷ công tối thiểu (hoặc công chuẩn).
+
+**A — Theo Nghị định 145/2020/NĐ-CP** (Điều 55, 56, 57; hướng dẫn Điều 98 Bộ luật Lao động 2019), tính theo từng ca:
+- Tiền làm đêm = đơn giá ngày × công đêm × 30%
+- Tiền làm lễ = đơn giá ngày × công lễ × (% lễ − 100%) + đơn giá ngày × công đêm ngày lễ × 20% × % lễ
+- Tiền công vượt chuẩn = đơn giá ngày × công vượt chuẩn × % tăng ca + đơn giá ngày × công đêm vượt chuẩn × 20% × % tăng ca
+- Ca ngày ngày lễ 300% = 300%. Ca đêm ngày lễ 300% = 300% + 30% + 20% × 300% = 390%. Ca đêm vượt chuẩn (tăng ca 200%) = 200% + 30% + 40% = 270%.
+
+**B — Theo quy chế lương riêng** (như bảng Excel nhà máy):
+- Tiền làm đêm = đơn giá ngày × công đêm × 30%
+- Đơn giá ngày có đêm = (lương bảo hiểm + phụ cấp + thưởng + tiền làm đêm cả tháng) ÷ công tối thiểu
+- Tiền làm lễ = đơn giá ngày có đêm × công lễ × (% lễ − 100%)
+- Tiền công vượt chuẩn = đơn giá ngày có đêm × công vượt chuẩn × % tăng ca
+- Excel: T = công đêm × S × 30% ÷ 22, U = (S + T) × công làm thêm × 2 ÷ 22, với S = lương + thưởng + phụ cấp.
+
+## Nhánh dự phòng (đóng băng)
+| Nhánh | Tính theo | Ghi chú |
 |---|---|---|
-| `v6.19` (nhánh chính, **đang dùng**) | `const PREMIUM_METHOD = 'B';` | Theo bảng Excel nhà máy |
-| `theo-tt` (**dự phòng**) | `const PREMIUM_METHOD = 'A';` | Theo Thông tư / Bộ luật Lao động |
+| `theo-tt` | chỉ A (NĐ 145/2020) | `const PREMIUM_METHOD = 'A'` trong `src/lib/premium-method.js` |
+| `quy-che-rieng` | chỉ B (quy chế lương riêng) | bản v6.19 trước khi có thẻ chọn trong Cấu hình |
 
-Cả hai nhánh đều có sẵn code của cả 2 phương án (`src/lib/workdays.js` → `premiumDays`, `src/lib/calc.js` → `calcLine`); dòng trên chọn phương án nào chạy.
-
-## Hai phương án
-Chỉ khác cách tính **tiền làm lễ và tiền làm thêm (công vượt chuẩn)** khi có ca đêm. Tiền làm đêm 30%, lương, thưởng, bảo hiểm, ăn ca… như nhau.
-
-- **A — theo từng ca (Thông tư):** phụ cấp đêm 30% của ca đêm cũng được nhân % lễ / % tăng ca.
-  Ca đêm ngày lễ 300% = 100% lương + 30% làm đêm + 260% làm lễ (= 390%). Ca ngày ngày lễ = 100% + 200%.
-  Ca đêm vượt công chuẩn (tăng ca ×2) = 200% + 30% làm đêm + 30% làm thêm (= 260%).
-- **B — như Excel nhà máy:** tiền làm lễ / làm thêm = (lương + thưởng + phụ cấp + tiền làm đêm cả tháng) ÷ công tối thiểu × số công × (% − 100%), cho mọi công lễ / vượt chuẩn (cả ca ngày).
-
-Ví dụ anh Hồ Đăng Thành, tháng 9/2026, ngày 2/9 làm K1,3 (2 công lễ): **B = 3.134.581**, **A = 3.250.201**.
-
-## Cập nhật code mới cho cả 2 nhánh
-1. Mọi thay đổi mới làm trên `v6.19` như bình thường (PR vào `v6.19`).
-2. Sau khi merge, đưa sang `theo-tt`:
-   ```
-   git fetch origin && git checkout theo-tt && git pull && git merge origin/v6.19 && git push origin theo-tt
-   ```
-3. **Không sửa dòng `PREMIUM_METHOD`** khi merge. Nếu git báo xung đột ở `src/lib/premium-method.js` thì giữ `'A'` cho `theo-tt`.
-4. Nếu cần sửa công thức của một phương án: sửa nhánh `v6.19` (code có cả A và B, test có cả A và B), rồi merge sang `theo-tt` như bước 2.
+Hai nhánh này giữ nguyên code tại thời điểm tạo (không có thẻ chọn), dùng khi cần quay về một bản chỉ tính một cách. Tính năng mới chỉ làm trên `v6.19`.
 
 ## Chạy server theo nhánh nào
-Trên server test (dán **từng dòng một**):
+Trên server test, dán **từng dòng một** (đổi `v6.19` thành `theo-tt` hoặc `quy-che-rieng` nếu cần bản dự phòng):
 ```
-cd /opt/payroll-src && git fetch origin && git checkout theo-tt && git pull && git log --oneline -1
+cd /opt/payroll-src && git fetch origin && git checkout v6.19 && git pull && git log --oneline -1
 ```
-(đổi `theo-tt` thành `v6.19` để về phương án B), rồi:
 ```
 cp -r /opt/payroll-src/{public,src,db,scripts,package.json,Dockerfile} /opt/appscripts-test/apps/payroll/ && cd /opt/appscripts-test && docker compose build payroll && docker compose up -d payroll
 ```
-Xem server đang chạy phương án nào:
-```
-grep "^const PREMIUM_METHOD" /opt/appscripts-test/apps/payroll/src/lib/premium-method.js
-```
-Đổi nhánh xong nhấn Ctrl+F5 và bấm **Tính lại** các bảng lương nháp. Bảng lương đã khoá giữ nguyên số cũ. Popup chi tiết từng người ghi rõ đang tính theo phương án nào ở dòng Làm lễ, tết.
+Sau đó Ctrl+F5 và bấm **Tính lại** các bảng lương nháp.
