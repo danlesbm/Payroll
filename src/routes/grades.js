@@ -70,11 +70,11 @@ async function changes(req, q) {
   const types = await rows('SELECT code, name, kind, is_total FROM coefficient_types ORDER BY sort_order, code');
   const tMap = new Map(types.map(t => [t.code, t]));
   const from = dateOk(q.from) || '1900-01-01', to = dateOk(q.to) || '2999-12-31';
-  const kind = ['insurance', 'bonus', 'amount'].includes(q.kind) ? q.kind : 'all', withFirst = q.first === '1';
+  const kind = ['insurance', 'bonus', 'amount', 'ins_amount'].includes(q.kind) ? q.kind : 'all', withFirst = q.first === '1';
   const hist = await rows(`SELECT h.id, h.employee_id, to_char(h.effective_from,'YYYY-MM-DD') AS ef, h.vals, h.grade_scale, h.grade, h.note, u.full_name AS by_name
     FROM coefficient_history h LEFT JOIN employees u ON u.sso_user_id=h.created_by WHERE h.employee_id = ANY($1::uuid[]) ORDER BY h.employee_id, h.effective_from, h.id`, [emps.map(e => e.id)]);
   const eMap = new Map(emps.map(e => [e.id, e]));
-  const sums = vals => { const o = { insurance: 0, bonus: 0, amount: 0 }; for (const [k, v] of Object.entries(vals || {})) { const t = tMap.get(k); if (t && !t.is_total) o[t.kind] += num(v); } for (const k of Object.keys(o)) o[k] = r4(o[k]); return o; };
+  const sums = vals => { const o = { insurance: 0, bonus: 0, amount: 0, ins_amount: 0 }; for (const [k, v] of Object.entries(vals || {})) { const t = tMap.get(k); if (t && !t.is_total) o[t.kind] += num(v); } for (const k of Object.keys(o)) o[k] = r4(o[k]); return o; };
   const out = []; let prev = null;
   for (const h of hist) {
     if (!prev || prev.employee_id !== h.employee_id) prev = null;
@@ -82,10 +82,10 @@ async function changes(req, q) {
     const gA = G.gradeLabel(h.grade_scale, h.grade), gB = prev ? G.gradeLabel(prev.grade_scale, prev.grade) : '';
     const detail = [];
     for (const t of types) { const x = num(h.vals?.[t.code]), y = prev ? num(prev.vals?.[t.code]) : 0; if (!prev ? x : x !== y) detail.push(`${t.name}: ${prev ? y : '—'} → ${x}`); }
-    const ch = { insurance: !!b && Math.abs(a.insurance - b.insurance) > 1e-9, bonus: !!b && Math.abs(a.bonus - b.bonus) > 1e-9, amount: !!b && Math.abs(a.amount - b.amount) > 1e-9, grade: !!b && gA !== gB };
-    const keep = prev ? (kind === 'all' ? (ch.insurance || ch.bonus || ch.amount || ch.grade) : (ch[kind] || (kind === 'insurance' && ch.grade))) : withFirst;
+    const ch = { insurance: !!b && Math.abs(a.insurance - b.insurance) > 1e-9, bonus: !!b && Math.abs(a.bonus - b.bonus) > 1e-9, amount: !!b && Math.abs(a.amount - b.amount) > 1e-9, ins_amount: !!b && Math.abs(a.ins_amount - b.ins_amount) > 1e-9, grade: !!b && gA !== gB };
+    const keep = prev ? (kind === 'all' ? (ch.insurance || ch.bonus || ch.amount || ch.ins_amount || ch.grade) : (ch[kind] || (kind === 'insurance' && ch.grade))) : withFirst;
     if (keep && h.ef >= from && h.ef <= to) out.push({ id: h.id, employee_id: h.employee_id, name: e.full_name, code: e.employee_code, dept: e.dept, group: e.group_name, ef: h.ef, first: !prev,
-      ins_before: b ? b.insurance : null, ins_after: a.insurance, bonus_before: b ? b.bonus : null, bonus_after: a.bonus, amount_before: b ? b.amount : null, amount_after: a.amount,
+      ins_before: b ? b.insurance : null, ins_after: a.insurance, bonus_before: b ? b.bonus : null, bonus_after: a.bonus, amount_before: b ? b.amount : null, amount_after: a.amount, ins_amount_before: b ? b.ins_amount : null, ins_amount_after: a.ins_amount,
       delta: b ? r4(a.insurance - b.insurance) : null, pct: b && b.insurance ? r4((a.insurance - b.insurance) / b.insurance * 100) : null, grade_before: gB, grade_after: gA, detail, note: h.note, by: h.by_name });
     prev = h;
   }

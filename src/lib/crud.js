@@ -14,7 +14,7 @@ function coerce(f, v) {
   }
   if (f.type === 'bool') return v === true || v === 'true';
   if (f.type === 'uuid') { if (v === null || v === '') return null; if (!isUuid(v)) bad(`"${L}" không hợp lệ`); return v; }
-  if (f.type === 'enum') { if (!f.values.includes(v)) bad(`"${L}" chỉ nhận: ${f.values.join(', ')}`); return v; }
+  if (f.type === 'enum') { if (f.nullable && (v === '' || v === null)) return null; if (!f.values.includes(v)) bad(`"${L}" chỉ nhận: ${f.values.join(', ')}`); return v; }
   return str(v);
 }
 function pickFields(fields, body, partial) {

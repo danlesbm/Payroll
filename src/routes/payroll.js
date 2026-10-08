@@ -77,7 +77,9 @@ router.get('/:groupId/:year/:month', api(async req => {
   // Bảng lương khoán: danh sách mọi người thuộc bảng (kể cả người tháng này không chi) để nhập số tiền riêng của tháng
   const fixedEdit = fixed && (st === 'none' || st === 'draft' ? req.auth.can('l2', ctx) : st === 'submitted' && req.auth.can('l3', ctx));
   const members = fixed ? (await fixedMembers(pool, groupId, year, month)).map(m => ({ id: m.id, full_name: m.full_name, fixed_amount: m.fixed_amount, fixed_tax_pct: m.fixed_tax_pct, month_amount: m.month_amount, month_note: m.month_note })) : undefined;
-  return { group, year, month, run, runLabel: run ? RUN_LABEL[run.status] : 'Chưa tính', lines, actions, sheets: sheetOut(sheets), members, fixedEdit,
+  // Thuế TNCN: cách xử lý (chỉ ước tính / trừ vào thưởng) và biểu thuế của năm — cho tab "Lương + thuế TNCN"
+  const pit = fixed ? null : { withhold: (await one(`SELECT value FROM settings WHERE key='pit_withhold'`))?.value || 'none', schedule: await require('../services/pit').scheduleFor(pool, year), settleMonth: 12 };
+  return { group, year, month, run, runLabel: run ? RUN_LABEL[run.status] : 'Chưa tính', lines, actions, sheets: sheetOut(sheets), members, fixedEdit, pit,
     coefTypes: await rows('SELECT code, name, kind, is_total FROM coefficient_types WHERE active ORDER BY sort_order, code'), names: Object.fromEntries(names.map(n => [n.sso_user_id, n.full_name])) };
 }));
 

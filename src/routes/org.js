@@ -8,7 +8,7 @@ const admin = req => req.auth.needAdmin();
 const reresolve = async () => { await resolveEmployees(); await require('../services/payroll').markStale(require('../db').pool); };
 
 router.get('/', api(async () => {
-  const [groups, sheets, departments, sso, counts, unassigned, total, fixedPeople] = await Promise.all([
+  const [groups, sheets, departments, sso, counts, unassigned, total, fixedPeople, salaryFunds] = await Promise.all([
     rows('SELECT * FROM groups ORDER BY sort_order, name'),
     rows('SELECT * FROM sheets ORDER BY sort_order, name'),
     rows(`SELECT d.*, COALESCE((SELECT json_agg(m.sso_department_id ORDER BY m.sort_order) FROM department_sso_map m WHERE m.department_id=d.id),'[]'::json) AS sso_ids FROM departments d ORDER BY d.sort_order, d.name`),
@@ -17,9 +17,10 @@ router.get('/', api(async () => {
     one(`SELECT count(*)::int AS n FROM v_employees WHERE sso_status='active' AND payroll_active AND department_id IS NULL`),
     one(`SELECT count(*)::int AS n FROM employees WHERE sso_status='active'`),
     rows(`SELECT v.id, v.full_name, v.fixed_group_id, v.payroll_active, COALESCE(v.pay_department_name, CASE WHEN v.sso_user_id LIKE 'manual:%' THEN 'Người ngoài SSO' END) AS department_name
-      FROM v_employees v WHERE v.pay_mode='fixed' AND v.sso_status='active' AND NOT v.excluded ORDER BY v.full_name`)]);
+      FROM v_employees v WHERE v.pay_mode='fixed' AND v.sso_status='active' AND NOT v.excluded ORDER BY v.full_name`),
+    rows('SELECT id, code, name, rule, active FROM salary_funds ORDER BY sort_order, name')]);
   const cnt = new Map(counts.map(c => [c.department_id, c.n]));
-  return { groups, sheets, departments: departments.map(d => ({ ...d, employee_count: cnt.get(d.id) || 0 })), ssoDepartments: sso, unassignedEmployees: unassigned.n, totalEmployees: total.n, fixedPeople };
+  return { groups, sheets, departments: departments.map(d => ({ ...d, employee_count: cnt.get(d.id) || 0 })), ssoDepartments: sso, unassignedEmployees: unassigned.n, totalEmployees: total.n, fixedPeople, salaryFunds };
 }));
 
 // Xoá có kiểm tra: chưa có dữ liệu chấm công/lương thì gỡ liên kết con rồi xoá
@@ -46,7 +47,7 @@ crud(router, { path: 'sheets', table: 'sheets', guard: admin, fields: [
   { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
 crud(router, { path: 'departments', table: 'departments', guard: admin, after: reresolve, fields: [
   { k: 'code', required: true, label: 'Mã' }, { k: 'name', required: true, label: 'Tên phòng/đơn vị' },
-  { k: 'sheet_id', type: 'uuid', label: 'Bảng chấm công' }, { k: 'meal_mode', type: 'enum', values: ['auto', 'actual', 'auto_wait'], label: 'Kiểu ăn ca' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
+  { k: 'sheet_id', type: 'uuid', label: 'Bảng chấm công' }, { k: 'meal_mode', type: 'enum', values: ['auto', 'actual', 'auto_wait'], label: 'Kiểu ăn ca' }, { k: 'fund_id', type: 'uuid', label: 'Quỹ lương' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
 
 // Chọn NHIỀU bộ phận cho 1 bảng chấm công (1 bộ phận chỉ thuộc 1 bảng chấm công: tick = chuyển sang đây, bỏ tick = gỡ ra)
 router.put('/sheets/:id/departments', api(async req => {

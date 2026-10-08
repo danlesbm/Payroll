@@ -174,12 +174,13 @@ async function coefXlsx(c, groupId, year, month) {
   const hm = new Map(hist.map(h => [h.employee_id, h]));
   const rows = emps.map(e => ({ ...e, positions: posTitle(e, group.kind, st), vals: hm.get(e.id)?.vals || {}, eff: hm.get(e.id)?.effective_from || '' }));
   const types = await q(c, 'SELECT code, name, kind, is_total FROM coefficient_types WHERE active ORDER BY sort_order, code');
-  const ins = types.filter(t => t.kind === 'insurance'), bon = types.filter(t => t.kind === 'bonus' && !t.is_total), totT = types.filter(t => t.kind === 'bonus' && t.is_total), amt = types.filter(t => t.kind === 'amount');
+  const ins = types.filter(t => t.kind === 'insurance'), bon = types.filter(t => t.kind === 'bonus' && !t.is_total), totT = types.filter(t => t.kind === 'bonus' && t.is_total), amt = types.filter(t => t.kind === 'amount'), insAmt = types.filter(t => t.kind === 'ins_amount');
   const sumOf = list => l => list.reduce((s, t) => s + n(l.vals[t.code]), 0);
   const cols = [
     { h: 'TT', w: 5, tt: true, val: () => '' }, { h: 'Họ và tên', w: 26, val: l => l.full_name }, { h: 'Chức vụ', w: 14, val: l => l.positions || '' },
     ...ins.map(t => ({ h: t.name, g: 'Hệ số lương (bảo hiểm)', w: 12, fmt: COEF, sum: true, val: l => n(l.vals[t.code]) })),
     ...(ins.length > 1 ? [{ h: 'Tổng hệ số lương', g: 'Hệ số lương (bảo hiểm)', w: 12, fmt: COEF, sum: true, val: sumOf(ins) }] : []),
+    ...insAmt.map(t => ({ h: t.name, g: 'Hệ số lương (bảo hiểm)', w: 14, fmt: MONEY, sum: true, val: l => n(l.vals[t.code]) || null })),
     ...bon.map(t => ({ h: t.name, g: 'Hệ số thưởng', w: 12, fmt: COEF, sum: true, val: l => n(l.vals[t.code]) })),
     ...(bon.length ? [{ h: 'Tổng hệ số thưởng', g: 'Hệ số thưởng', w: 12, fmt: COEF, sum: true, val: l => sumOf(bon)(l) || sumOf(totT)(l) }] : []),
     ...amt.map(t => ({ h: t.name, g: 'Phụ cấp (số tiền)', w: 13, fmt: MONEY, sum: true, val: l => n(l.vals[t.code]) })),

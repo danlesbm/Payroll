@@ -8,6 +8,8 @@ const { methodOf } = require('../lib/premium-method');
 const sched = require('./schedule');
 const { safetyHolders } = require('./safety');
 const workdaysLib = require('../lib/workdays');
+const pit = require('./pit');
+const { resolveFunds } = require('./funds');
 const q = (c, sql, p) => c.query(sql, p).then(r => r.rows);
 
 /** standardDays = công chuẩn NHẬP TAY cho cả bảng (ghi đè lịch); undefined = giữ giá trị đã lưu, null/'' = bỏ ghi đè, dùng công chuẩn theo lịch từng người. */
@@ -56,7 +58,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
     q(c, 'SELECT * FROM unit_prices WHERE effective_from <= $1', [end]),
     q(c, 'SELECT employee_id, kind, label, calc, basis, value, amount FROM monthly_items WHERE year=$1 AND month=$2 ORDER BY id', [year, month]),
     q(c, 'SELECT id, employee_id, effective_from, vals FROM coefficient_history WHERE employee_id = ANY($1::uuid[]) AND effective_from <= $2', [ids, end]),
-    q(c, `SELECT key, value FROM settings WHERE key IN ('standard_days','meal_in_net','safety_coef','premium_method')`),
+    q(c, `SELECT key, value FROM settings WHERE key IN ('standard_days','meal_in_net','safety_coef','premium_method','pit_withhold')`),
     q(c, `SELECT pe.employee_id, pr.safety, pr.labor, s.use_safety, s.use_labor FROM period_employees pe JOIN periods p ON p.id=pe.period_id JOIN sheets s ON s.id=p.sheet_id
           LEFT JOIN period_ratings pr ON pr.period_id=pe.period_id AND pr.employee_id=pe.employee_id WHERE s.group_id=$1 AND p.year=$2 AND p.month=$3`, [groupId, year, month]),
     q(c, 'SELECT grade, factor FROM labor_grades'), q(c, 'SELECT grade, factor FROM safety_grades'),
@@ -140,9 +142,12 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
     lines.push({ employeeId: e.id, workDays: wTotal, r, detail: { workSalary: wd, workBonus: wdB, otWork: otCnt, diffStd: Math.round((wTotal - std) * 100) / 100, rateBasis: sc.basis, planFactor: pfNum, rateDiv: r.rateDiv, shiftNo: e.shift_no || null, groupMin: gm, laborGrade, laborFactor: r.laborFactor, safetyGrade, safetyFactor: r.safetyFactor, safetyAllowance: r.safetyAllowance, counts, workDay: wDay, workNight: wNight, mealQty: qty, mealMode, mealCodes: auto.items, mealDays: auto.days, mealActualAmount: calc.mealAmount(qty, rateByType), mealRates: rateByType, coefs: coefRow?.vals || {}, coefEffectiveFrom: coefRow?.effective_from || null,
       unitPrice: calc.num(price?.amount), baseWage, standardDays: std, minDays: minD, ratio: r.ratio, ratioBonus: r.ratioBonus, payStatus: r.payStatus, otDays: r.otDays, dailySalary: r.dailySalary, dailyBonus: r.dailyBonus, otSalary: sc.otSalary, otBonus: sc.otBonus,
       nightSalary: r.nightSalary, nightBonus: r.nightBonus, extraSalary: r.extraSalary, extraBonus: r.extraBonus, holidaySalary: r.holidaySalary, holidayBonus: r.holidayBonus, otSalaryAmt: r.otSalaryAmt, otBonusAmt: r.otBonusAmt, premiumDays: r.premiumDays, premiumInBonus: r.premiumInBonus, premiumMethod: r.premiumMethod, premSal: r.premSal, premBon: r.premBon,
-      weeklyOff: sc.weeklyOff, scheduleSource: sc.source, offDays: sc.info.offDays.length, holidayDays: sc.info.holidays, zeroedOffDays: zeroed, overridden: !!override, insCoef: r.insCoef, insuranceFull: r.insuranceFull, insuranceBase: r.insuranceBase, insuranceCoefSalary: r.insuranceSalary, safetyInInsurance: true, bonusCoef: r.bonusCoef, bonusBase: r.bonusBase,
+      weeklyOff: sc.weeklyOff, scheduleSource: sc.source, offDays: sc.info.offDays.length, holidayDays: sc.info.holidays, zeroedOffDays: zeroed, overridden: !!override, insCoef: r.insCoef, insAmount: r.insAmount, insMonthly: r.insMonthly, insuranceFull: r.insuranceFull, insuranceBase: r.insuranceBase, insuranceCoefSalary: r.insuranceSalary, safetyInInsurance: true, bonusCoef: r.bonusCoef, bonusBase: r.bonusBase,
       monthlyBonus: r.monthlyBonus, bonusDeduction: r.bonusDeduction, salaryNet: r.salaryNet, bonusNet: r.bonusNet, extras: r.extraDetail, deductions: r.deductionDetail, periodicDeduction: r.periodicDeduction, monthlyDeduction: r.monthlyDeduction, warnings } });
   }
+  // Thuế TNCN lũy tiến (tạm tính tháng / quyết toán tháng 12) và quỹ lương của từng người — xem services/pit.js, services/funds.js
+  const pitOf = await pit.applyRunPit(c, { groupId, year, month, lines, prevRunId: existing?.id || null, withhold: setting.pit_withhold === 'bonus' ? 'bonus' : 'none' });
+  const fundOf = await resolveFunds(c, ids, { kind: group.kind });
   // Công chuẩn hiển thị của bảng = mức phổ biến nhất trong bảng (mỗi người vẫn dùng công chuẩn riêng, xem chi tiết dòng lương)
   const std = Number(Object.entries(stdCount).sort((a, b) => b[1] - a[1] || b[0] - a[0])[0]?.[0]) || override || sched.forEmployee(sctx, { weeklyOff: 'sun' }).standard;
   const run = (await q(c, `INSERT INTO payroll_runs(group_id, year, month, status, standard_days, std_override, stale, calculated_at, calculated_by, provisional_note, min_info)
@@ -151,8 +156,9 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
       RETURNING *`, [groupId, year, month, std, override, userId, pending.length ? pending.join('; ') : null, gmInfo ? JSON.stringify(gmInfo) : null]))[0];
   await c.query('DELETE FROM payroll_lines WHERE run_id=$1', [run.id]);
   // Cột "Lương bảo hiểm" hiển thị gồm phụ cấp an toàn (đã nhân xếp loại an toàn); cột "Phụ cấp" còn các phụ cấp khác. Tổng không đổi.
-  for (const l of lines) await c.query(`INSERT INTO payroll_lines(run_id, employee_id, work_days, insurance_salary, bonus, allowance, meal_amount, deduction, net, detail, night_salary, night_bonus, extra_salary, extra_bonus, holiday_salary, holiday_bonus)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, [run.id, l.employeeId, l.workDays, l.r.insuranceSalary + l.r.safetyAllowance, l.r.bonus, l.r.allowance - l.r.safetyAllowance, l.r.meal, l.r.deduction, l.r.net, JSON.stringify(l.detail), l.r.nightSalary, l.r.nightBonus, l.r.extraSalary, l.r.extraBonus, l.r.holidaySalary, l.r.holidayBonus]);
+  for (const l of lines) await c.query(`INSERT INTO payroll_lines(run_id, employee_id, work_days, insurance_salary, bonus, allowance, meal_amount, deduction, net, detail, night_salary, night_bonus, extra_salary, extra_bonus, holiday_salary, holiday_bonus, pit_taxable, pit_tax, fund_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, [run.id, l.employeeId, l.workDays, l.r.insuranceSalary + l.r.safetyAllowance, l.r.bonus, l.r.allowance - l.r.safetyAllowance, l.r.meal, l.r.deduction, l.r.net, JSON.stringify(l.detail), l.r.nightSalary, l.r.nightBonus, l.r.extraSalary, l.r.extraBonus, l.r.holidaySalary, l.r.holidayBonus,
+        pitOf.get(l.employeeId)?.taxable ?? null, pitOf.get(l.employeeId)?.tax ?? null, fundOf.get(l.employeeId) || null]);
   return { run, count: lines.length, pending, warnings: lines.filter(l => l.detail.warnings.length).length };
 }
 // Bảng lương khoán: mỗi người lương khoán được chọn vào bảng này nhận số tiền khoán của tháng (nhập riêng tháng này, nếu không thì số tiền mặc định ở Nhân sự),
@@ -173,9 +179,10 @@ async function calculateFixedRun(c, { group, year, month, userId }) {
       VALUES($1,$2,$3,'draft',0,NULL,false,now(),$4,NULL,NULL)
       ON CONFLICT (group_id, year, month) DO UPDATE SET stale=false, calculated_at=now(), calculated_by=EXCLUDED.calculated_by RETURNING *`, [group.id, year, month, userId]))[0];
   await c.query('DELETE FROM payroll_lines WHERE run_id=$1', [run.id]);
+  const fundOf = await resolveFunds(c, lines.map(l => l.employeeId), { fallbackKind: group.kind });   // quỹ lương theo bộ phận của từng người (vd thù lao HĐQT → quỹ HĐQT)
   // Thuế vãng lai ghi ở cột Khoản trừ; Thực lĩnh = số tiền khoán − thuế
-  for (const l of lines) await c.query(`INSERT INTO payroll_lines(run_id, employee_id, work_days, insurance_salary, bonus, allowance, meal_amount, deduction, net, detail) VALUES($1,$2,0,0,0,0,0,$3,$4,$5)`,
-    [run.id, l.employeeId, l.r.tax, l.r.net, JSON.stringify(l.detail)]);
+  for (const l of lines) await c.query(`INSERT INTO payroll_lines(run_id, employee_id, work_days, insurance_salary, bonus, allowance, meal_amount, deduction, net, detail, fund_id) VALUES($1,$2,0,0,0,0,0,$3,$4,$5,$6)`,
+    [run.id, l.employeeId, l.r.tax, l.r.net, JSON.stringify(l.detail), fundOf.get(l.employeeId) || null]);
   return { run, count: lines.length, pending: [], warnings: 0 };
 }
 // Cấp 2 chỉnh công -> bảng lương nháp tự tính lại; lỗi thì đánh dấu "cần tính lại"
