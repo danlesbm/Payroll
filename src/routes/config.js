@@ -21,7 +21,7 @@ router.get('/', api(async req => {
     rows('SELECT * FROM attendance_codes ORDER BY sort_order, code'), rows('SELECT * FROM meal_types ORDER BY sort_order, name'),
     rows('SELECT code, meal_type_id, quantity FROM code_meals'), rows('SELECT * FROM coefficient_types ORDER BY sort_order, code'),
     rows('SELECT * FROM deduction_types ORDER BY sort_order, code'), rows('SELECT key, value FROM settings'),
-    rows(`SELECT s.*, e.full_name AS updated_by_name, EXISTS (SELECT 1 FROM payroll_runs r WHERE r.year >= s.year AND r.status='locked') AS has_locked FROM pit_schedules s LEFT JOIN employees e ON e.sso_user_id=s.updated_by ORDER BY s.year DESC`),
+    rows(`SELECT s.*, e.full_name AS updated_by_name, EXISTS (SELECT 1 FROM payroll_runs r WHERE r.status='locked' AND r.year >= s.year AND r.year < COALESCE((SELECT min(n.year) FROM pit_schedules n WHERE n.year > s.year), 9999)) AS has_locked FROM pit_schedules s LEFT JOIN employees e ON e.sso_user_id=s.updated_by ORDER BY s.year DESC`),
     rows('SELECT * FROM salary_funds ORDER BY sort_order, name')]);
   const out = { codes, mealTypes, codeMeals, coefTypes, dedTypes, settings: Object.fromEntries(settings.map(s => [s.key, s.value])), pitSchedules, salaryFunds };
   if (sensitive) {
