@@ -98,3 +98,13 @@ test('lương đóng BH thỏa thuận (loại ins_amount) thay cho hệ số ×
   const half = c.calcLine({ ...base, workDays: 13, minDays: 26, coefs: { bh_thoa_thuan: 12000000 } });
   assert.equal(half.insuranceSalary, 6000000);
 });
+
+test('quyết toán dự kiến giữa năm: quy biểu thuế về n/12 năm thì thu nhập đều → khớp tổng tạm tính', () => {
+  const m = P.monthlyPit({ taxable: 60000000, insurance: 3000000, dependents: 1, extrasYear: { health: 12000000, education: 0, other: 0 }, schedule: S26 });
+  const n = 9, f = n / 12;
+  const a = P.annualPit({ taxable: 60000000 * n, insurance: 3000000 * n, dependentMonths: n, selfMonths: n, extrasYear: { health: 12000000 * f, education: 0, other: 0 }, schedule: P.scaleSchedule(S26, f), priorTax: m.tax * n });
+  assert.ok(Math.abs(a.settle) <= n, `chênh lệch chỉ do làm tròn: ${a.settle}`);
+  assert.equal(P.scaleSchedule(S26, 0.5).brackets[0].upto, 60000000);
+  assert.equal(P.scaleSchedule(S26, 0.5).brackets[4].upto, null);
+  assert.equal(P.scaleSchedule(S26, 0.5).healthCap, 11500000);
+});

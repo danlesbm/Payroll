@@ -580,7 +580,7 @@ PAGES.payroll = async (me, root) => {
   // Thưởng / khoản trừ trong tháng: thêm cho 1 hoặc nhiều người; mỗi khoản có cách tính linh hoạt
   async function items(gid, d) {
     const r = await GET(`/api/items?groupId=${gid}&year=${ymState.year}&month=${ymState.month}`);
-    const KIND = { bonus: 'Thưởng thêm (vào bảng thưởng)', deduction: 'Trừ vào lương (vào bảng lương)', bonus_deduction: 'Trừ vào thưởng, vd thuế TNCN (vào bảng thưởng)' };
+    const KIND = { bonus: 'Thưởng thêm (vào bảng thưởng)', deduction: 'Trừ vào lương (vào bảng lương)', bonus_deduction: 'Trừ vào thưởng (vào bảng thưởng)' };
     const emps = (await GET(`/api/items/roster?groupId=${gid}`)).employees.map(l => ({ id: l.id, name: l.full_name, dept: l.department_name || 'Chưa xếp bộ phận' }));
     const depts = [...new Set(emps.map(e => e.dept))];
     const editable = !d.run || ['draft', 'submitted'].includes(d.run.status);

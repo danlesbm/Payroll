@@ -81,6 +81,10 @@ function annualPit(i) {
   const priorTax = round(i.priorTax);
   return { mode: 'year', taxable, insurance, selfMonths: months, self, dependentMonths: depMonths, dependentAmount: round(s.dependentDeduction), dependent, extras: ex, totalDeduction, assessable, tax: p.tax, parts: p.parts, priorTax, settle: p.tax - priorTax };
 }
+/** Quy biểu thuế về f phần của năm (vd 9/12): mức trần bậc và mức tối đa y tế / giáo dục nhân f.
+ *  Dùng cho quyết toán DỰ KIẾN giữa năm (chưa có tháng 12): coi như năm chỉ có n tháng đã có lương để so với thuế đã tạm tính. */
+const scaleSchedule = (s, f) => s && ({ ...s, brackets: normBrackets(s.brackets).map(b => ({ upto: b.upto === null ? null : b.upto * f, rate: b.rate })),
+  healthCap: s.healthCap === null || s.healthCap === undefined ? null : num(s.healthCap) * f, educationCap: s.educationCap === null || s.educationCap === undefined ? null : num(s.educationCap) * f });
 /** Chia số thuế của người cho nhiều dòng lương cùng tháng (người chuyển bảng lương trong tháng) theo tỷ lệ thu nhập chịu thuế; dòng cuối nhận phần lẻ. */
 function allocate(total, weights) {
   const w = weights.map(x => Math.max(0, num(x))), sum = w.reduce((a, b) => a + b, 0), n = w.length;
@@ -102,4 +106,4 @@ function dependentsInMonth(list, year, month) {
 const taxableOf = l => round(num(l.insurance_salary) + num(l.allowance) + num(l.bonus));
 /** Tiền BH bắt buộc được trừ: các khoản trừ định kỳ có đánh dấu "được trừ khi tính thuế". */
 const insuranceOf = (deductions, deductibleCodes) => round((deductions || []).filter(d => deductibleCodes.has(d.code)).reduce((s, d) => s + num(d.amount), 0));
-module.exports = { normBrackets, validateBrackets, progressive, monthlyPit, annualPit, allocate, dependentsInMonth, yearExtras, taxableOf, insuranceOf, ymKey };
+module.exports = { normBrackets, validateBrackets, progressive, monthlyPit, annualPit, scaleSchedule, allocate, dependentsInMonth, yearExtras, taxableOf, insuranceOf, ymKey };

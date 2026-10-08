@@ -612,7 +612,7 @@ ALTER TABLE deduction_types ADD COLUMN IF NOT EXISTS pit_deductible boolean NOT 
 -- Thuế TNCN của dòng lương: thu nhập chịu thuế (lương BH + phụ cấp + thưởng; không gồm làm đêm / thêm / lễ, ăn ca) và thuế tạm tính / quyết toán của dòng
 ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS pit_taxable numeric(16,2);
 ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS pit_tax numeric(16,2);
-ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS fund_id uuid REFERENCES salary_funds(id) ON DELETE SET NULL;   -- quỹ lương lúc tính (giữ đúng lịch sử khi đổi bộ phận)
+ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS fund_id uuid REFERENCES salary_funds(id);   -- quỹ lương lúc tính (giữ đúng lịch sử khi đổi bộ phận); quỹ đã có trong bảng lương thì không xoá được, chỉ Ngừng
 -- Loại hệ số "ins_amount": lương đóng bảo hiểm theo số tiền thỏa thuận (thay cho hệ số BH × lương cơ sở khi > 0)
 DO $$ DECLARE c text; BEGIN
   FOR c IN SELECT conname FROM pg_constraint WHERE conrelid='coefficient_types'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%kind%' LOOP

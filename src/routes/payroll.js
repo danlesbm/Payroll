@@ -405,7 +405,7 @@ async function assertItemEditable(c, req, employeeId, year, month) {
   return e;
 }
 // Thêm khoản thưởng/trừ cho 1 hoặc NHIỀU người cùng lúc.
-//  kind: bonus (thưởng thêm → bảng thưởng) | deduction (trừ vào lương → bảng lương) | bonus_deduction (trừ vào thưởng, vd thuế TNCN → bảng thưởng)
+//  kind: bonus (thưởng thêm → bảng thưởng) | deduction (trừ vào lương → bảng lương) | bonus_deduction (trừ vào thưởng → bảng thưởng; thuế TNCN tự tính xem services/pit.js)
 //  calc: fixed (mọi người cùng 1 số tiền) | coef_price (hệ số của từng người × đơn giá; basis = insurance | bonus)
 itemRouter.post('/', api(async req => {
   const b = req.body || {}, year = Number(b.year), month = Number(b.month);

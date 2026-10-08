@@ -47,13 +47,12 @@ async function applyRunPit(c, { groupId, year, month, lines, prevRunId, withhold
   const schedule = await scheduleFor(c, year);
   const codes = await deductibleCodes(c);
   const ids = lines.map(l => l.employeeId);
-  const [deps, extras, others, prevRows] = await Promise.all([
-    dependentsOf(c, ids), extrasOf(c, ids, year),
-    // Cùng tháng ở bảng lương khác (người chuyển bảng lương trong tháng): thuế tính trên tổng thu nhập của người, chia theo tỷ lệ
-    q(c, `SELECT pl.employee_id, r.group_id, r.id AS run_id, pl.insurance_salary, pl.allowance, pl.bonus, pl.detail->'deductions' AS deductions
-          FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id WHERE r.year=$1 AND r.month=$2 AND r.group_id<>$3 AND pl.employee_id = ANY($4::uuid[]) AND ${NOT_FIXED}`, [year, month, groupId, ids]),
-    prevRunId ? q(c, 'SELECT employee_id, pit_taxable FROM payroll_lines WHERE run_id=$1', [prevRunId]) : []
-  ]);
+  // Truy vấn tuần tự (cùng một client giao dịch không chạy song song được)
+  const deps = await dependentsOf(c, ids), extras = await extrasOf(c, ids, year);
+  // Cùng tháng ở bảng lương khác (người chuyển bảng lương trong tháng): thuế tính trên tổng thu nhập của người, chia theo tỷ lệ
+  const others = await q(c, `SELECT pl.employee_id, r.group_id, r.id AS run_id, pl.insurance_salary, pl.allowance, pl.bonus, pl.detail->'deductions' AS deductions
+          FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id WHERE r.year=$1 AND r.month=$2 AND r.group_id<>$3 AND pl.employee_id = ANY($4::uuid[]) AND ${NOT_FIXED}`, [year, month, groupId, ids]);
+  const prevRows = prevRunId ? await q(c, 'SELECT employee_id, pit_taxable FROM payroll_lines WHERE run_id=$1', [prevRunId]) : [];
   const prior = month === 12 ? await q(c, `SELECT r.month, r.status, pl.employee_id, pl.insurance_salary, pl.allowance, pl.bonus, pl.detail->'deductions' AS deductions, pl.pit_tax,
         (pl.detail ? 'pit') AS has_pit, (pl.detail->'pit'->>'dependents')::numeric AS pit_dependents
       FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id WHERE r.year=$1 AND r.month < 12 AND pl.employee_id = ANY($2::uuid[]) AND ${NOT_FIXED}`, [year, ids]) : [];
@@ -115,13 +114,12 @@ async function yearSummary(c, { year, employeeIds = null, groupIds = null, locke
   let ids = employeeIds;
   if (!ids) ids = (await q(c, `SELECT DISTINCT pl.employee_id FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id WHERE r.year=$1 AND ${NOT_FIXED} ${st} ${groupIds ? 'AND r.group_id = ANY($2::uuid[])' : ''}`, groupIds ? [year, groupIds] : [year])).map(r => r.employee_id);
   if (!ids.length) return { year, schedule, employees: [] };
-  const [lines, emps, deps, extras] = await Promise.all([
-    q(c, `SELECT r.month, r.status, r.group_id, g.name AS group_name, pl.employee_id, pl.insurance_salary, pl.allowance, pl.bonus, pl.meal_amount, pl.net, pl.pit_tax, pl.pit_taxable,
+  const lines = await q(c, `SELECT r.month, r.status, r.group_id, g.name AS group_name, pl.employee_id, pl.insurance_salary, pl.allowance, pl.bonus, pl.meal_amount, pl.net, pl.pit_tax, pl.pit_taxable,
             pl.night_salary + pl.night_bonus AS night, pl.extra_salary + pl.extra_bonus AS extra, pl.holiday_salary + pl.holiday_bonus AS holiday,
             pl.detail->'deductions' AS deductions, (pl.detail ? 'pit') AS has_pit, (pl.detail->'pit'->>'dependents')::numeric AS pit_dependents, pl.detail->'pit'->'annual' AS stored_annual
-          FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id JOIN groups g ON g.id=r.group_id WHERE r.year=$1 AND pl.employee_id = ANY($2::uuid[]) AND ${NOT_FIXED} ${st} ORDER BY r.month`, [year, ids]),
-    q(c, `SELECT v.id, v.full_name, v.employee_code, v.pay_department_name, v.pay_department_sort, v.group_name, v.emp_order, v.sort_order FROM v_employees v WHERE v.id = ANY($1::uuid[])`, [ids]),
-    dependentsOf(c, ids), extrasOf(c, ids, year)]);
+          FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id JOIN groups g ON g.id=r.group_id WHERE r.year=$1 AND pl.employee_id = ANY($2::uuid[]) AND ${NOT_FIXED} ${st} ORDER BY r.month`, [year, ids]);
+  const emps = await q(c, `SELECT v.id, v.full_name, v.employee_code, v.pay_department_name, v.pay_department_sort, v.group_name, v.emp_order, v.sort_order FROM v_employees v WHERE v.id = ANY($1::uuid[])`, [ids]);
+  const deps = await dependentsOf(c, ids), extras = await extrasOf(c, ids, year);
   const byEmp = new Map(); for (const l of lines) (byEmp.get(l.employee_id) || byEmp.set(l.employee_id, []).get(l.employee_id)).push(l);
   const out = [];
   for (const e of emps) {
@@ -138,9 +136,13 @@ async function yearSummary(c, { year, employeeIds = null, groupIds = null, locke
       o.groups = [...new Set(list.map(l => l.group_name))];
     }
     const prior = Object.entries(months).filter(([m]) => Number(m) < 12).reduce((s, [, x]) => s + num(x.tax), 0);
-    const all = Object.values(months);
-    const annual = schedule ? P.annualPit({ taxable: all.reduce((s, x) => s + x.taxable, 0), insurance: all.reduce((s, x) => s + x.insurance, 0), dependentMonths: depMonthsOfYear(depList, year), extrasYear: ex, schedule, priorTax: prior }) : null;
-    const dec = byMonth.get(12);
+    const all = Object.values(months), dec = byMonth.get(12), n = byMonth.size;
+    // Có tháng 12: quyết toán cả năm (bản thân đủ 12 tháng). Chưa có tháng 12: quyết toán DỰ KIẾN theo n tháng đã có lương —
+    // bậc thuế, mức tối đa y tế / giáo dục và giảm trừ y tế / giáo dục / khác quy về n/12 năm, bản thân n tháng, người phụ thuộc trong n tháng đó.
+    const f = dec ? 1 : n / 12, ks = [...byMonth.keys()];
+    const annual = schedule ? Object.assign(P.annualPit({ taxable: all.reduce((s, x) => s + x.taxable, 0), insurance: all.reduce((s, x) => s + x.insurance, 0),
+      dependentMonths: dec ? depMonthsOfYear(depList, year) : ks.reduce((s, m) => s + P.dependentsInMonth(depList, year, m), 0), selfMonths: dec ? 12 : n,
+      extrasYear: dec ? ex : { health: ex.health * f, education: ex.education * f, other: ex.other * f }, schedule: dec ? schedule : P.scaleSchedule(schedule, f), priorTax: prior }), { projected: !dec, months: n }) : null;
     if (dec && schedule) {   // tháng 12 = quyết toán: dùng số đã lưu khi tính lương; tháng 12 tính trước khi có chức năng thuế thì lấy số quyết toán tính lại
       const stored = dec.every(l => l.has_pit);
       months[12].tax = stored ? dec.reduce((s, l) => s + num(l.pit_tax), 0) : annual.settle;
