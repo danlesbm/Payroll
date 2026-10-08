@@ -170,3 +170,12 @@ table.pitbr{width:auto;min-width:min(720px,100%)}.pitbr input{width:160px;text-a
 .pitopt{display:block;margin:4px 0;font-size:13px}
 input.bad,select.bad{border-color:var(--er);background:#fef2f2}
 .pited [hidden]{display:none}
+/* v6.24 bảng lương: tab "Lương + thuế TNCN" và phần thuế trong chi tiết từng người */
+.pittb th.pitkey{background:#e8eefc}
+.pittb tr.pitdpt td{background:#f1f5f9;font-weight:600;font-style:italic;padding:5px 8px}
+.pittb .pitnote{white-space:normal;max-width:210px;font-size:11px;color:var(--mu);line-height:1.25;margin-top:2px}
+.pitneg{color:var(--ok)}.pittb .pitsub{font-size:10.5px;color:var(--mu)}
+.pithead{margin:10px 0 8px}
+.pitbanner{background:#fef3c7;color:#78350f;border:1px solid #f59e0b;border-radius:8px;padding:8px 12px;margin-bottom:8px}
+.pitbanner b{font-size:14px}
+.pitbrk{font-size:12px;margin:2px 0}.pitbrk th,.pitbrk td{padding:3px 6px}.pitbrk th{position:static;background:#f6f8fc}

@@ -260,16 +260,16 @@ router.get('/:groupId/:year/:month/export', async (req, res) => {
   res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="bang-luong-${year}-${String(month).padStart(2, '0')}.csv"` });
   res.send('﻿' + [head, ...body].map(r => r.map(csvCell).join(',')).join('\r\n'));
 });
-// Xuất Excel theo bảng lương (nhóm): luong | thuong | he-so | an-ca
+// Xuất Excel theo bảng lương (nhóm): luong | thuong | he-so | an-ca | khoan | pit (thuế TNCN tạm tính / quyết toán tháng 12)
 router.get('/:groupId/:year/:month/export/:what', async (req, res) => {
   const groupId = groupParam(req); const { year, month } = ym(req);
   if (!req.auth.canAny(PAY_ROLES, gctx(groupId))) bad('Bạn không được phân quyền xem bảng lương này', 403);
-  const fn = { luong: X.salaryXlsx, thuong: X.bonusXlsx, 'he-so': X.coefXlsx, 'an-ca': X.mealXlsx, khoan: X.fixedXlsx }[req.params.what];
+  const fn = { luong: X.salaryXlsx, thuong: X.bonusXlsx, 'he-so': X.coefXlsx, 'an-ca': X.mealXlsx, khoan: X.fixedXlsx, pit: X.pitXlsx }[req.params.what];
   if (!fn) bad('Loại bảng không hợp lệ', 404);
   const g = await one('SELECT name FROM groups WHERE id=$1', [groupId]); if (!g) bad('Không tìm thấy bảng lương', 404);
   const buf = await fn(pool, groupId, year, month);
   await audit(req, 'export.' + req.params.what, 'group', groupId, { year, month });
-  sendXlsx(res, buf, `${{ luong: 'bang-luong', thuong: 'bang-thuong', 'he-so': 'bang-he-so', 'an-ca': 'tien-an-ca', khoan: 'bang-luong-khoan' }[req.params.what]}-${slug(g.name)}-${year}-${pad2(month)}.xlsx`);
+  sendXlsx(res, buf, `${{ luong: 'bang-luong', thuong: 'bang-thuong', 'he-so': 'bang-he-so', 'an-ca': 'tien-an-ca', khoan: 'bang-luong-khoan', pit: month === 12 ? 'quyet-toan-thue-tncn' : 'thue-tncn' }[req.params.what]}-${slug(g.name)}-${year}-${pad2(month)}.xlsx`);
 });
 router.get('/meals/:groupId/:year/:month', api(async req => {
   const groupId = groupParam(req); const { year, month } = ym(req);
