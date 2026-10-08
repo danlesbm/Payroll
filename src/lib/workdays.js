@@ -3,7 +3,7 @@ const pad = n => String(n).padStart(2, '0');
 const dim = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const r2 = n => Math.round(n * 100) / 100;
-const { PREMIUM_METHOD } = require('./premium-method');
+const { PREMIUM_METHOD, NIGHT_OT_EXTRA } = require('./premium-method');
 const EPS = 1e-9;
 
 // Ngày nghỉ hằng tuần (0 = Chủ nhật … 6 = Thứ bảy)
@@ -75,7 +75,8 @@ function shiftGroupMin(rows) {
  *  Phần lễ = công × (h − 1) (+ phụ cấp sửa chữa × (h − 1)).
  *  Phụ cấp đêm × % lễ / % tăng ca: tuỳ phương án (src/lib/premium-method.js; o.method ghi đè khi kiểm thử):
  *    B (Excel): KHÔNG cộng ở đây — calcLine tính tiền lễ / tăng ca trên đơn giá đã gồm tiền đêm bình quân. K1,3 ngày lễ 300%: đêm 0,3, lễ 4.
- *    A (Thông tư): cộng phụ cấp đêm × (h − 1) vào lễ và × (otMult − 1) vào làm thêm. K1,3 ngày lễ 300%: đêm 0,3, lễ 2 + 2,6 = 4,6. */
+ *    A (NĐ 145/2020 Điều 57): công đêm của ngày lễ / phần vượt chuẩn được thêm 20% × đơn giá ban ngày của công đó
+ *      (20% × h vào lễ, 20% × otMult vào làm thêm). K1,3 ngày lễ 300%: đêm 0,3, lễ 2 + 2 + 0,6 = 4,6. */
 function premiumDays(entries, o) {
   const out = { night: 0, extra: 0, holiday: 0 }, methodA = (o.method || PREMIUM_METHOD) === 'A';
   const std = num(o.std), otM = num(o.otMult); let cum = 0;
@@ -88,10 +89,10 @@ function premiumDays(entries, o) {
     if (o.ot && o.ot(e.code)) { out.extra += val * c; continue; }
     const over = std > 0 ? Math.max(0, Math.min(val, cum + val - std)) / val : 0; cum += val;   // phần công của ngày này vượt công tiêu chuẩn
     if (kind === 'night') {
-      const add = (num(w.night) > 0 ? num(w.night) : val) * (c - 1); out.night += add;
-      if (methodA) {   // phương án A: phụ cấp đêm cũng nhân % lễ / % tăng ca (ca đêm lễ 300% = 390%, ca đêm tăng ca ×2 = 260%)
-        if (h !== 1) out.holiday += add * (h - 1);
-        if (over > 0 && otM > 1) out.extra += add * (otM - 1) * over;
+      const nd = num(w.night) > 0 ? num(w.night) : val; out.night += nd * (c - 1);
+      if (methodA) {   // phương án A: làm thêm vào ban đêm thêm 20% đơn giá ban ngày của công đó (ca đêm lễ 300% = 390%, ca đêm tăng ca ×2 = 270%)
+        if (h > 1) out.holiday += nd * NIGHT_OT_EXTRA * h;
+        if (over > 0 && otM > 1) out.extra += nd * NIGHT_OT_EXTRA * otM * over;
       }
     } else if (kind) {   // phụ cấp kiểu sửa chữa…: phần phụ cấp cũng nhân % lễ / tăng ca
       const add = val * (c - 1); out.extra += add;
