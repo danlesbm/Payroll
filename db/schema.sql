@@ -320,6 +320,8 @@ CREATE TABLE IF NOT EXISTS period_ratings (
 
 -- v6.8: chức danh hiển thị ở nhà máy (Trưởng phòng -> Giám đốc nhà máy ...); để trống = giữ nguyên
 INSERT INTO settings(key,value) VALUES ('plant_title_head','Giám đốc NM'),('plant_title_deputy','P. Giám đốc NM') ON CONFLICT (key) DO NOTHING;
+-- v6.23: phương pháp tính tiền làm lễ, làm thêm (A = Nghị định 145/2020, B = quy chế lương riêng); giữ B như đang dùng
+INSERT INTO settings(key,value,note) VALUES ('premium_method','B','Phương pháp tính tiền làm lễ, làm thêm: A = Nghị định 145/2020/NĐ-CP, B = quy chế lương riêng') ON CONFLICT (key) DO NOTHING;
 
 -- v6.10: quy trình mới (cấp 1 → cấp 2 → cấp 3 → Giám đốc). Mở rộng ràng buộc trạng thái; "adjusting" cũ gộp vào "pending_l2".
 ALTER TABLE periods DROP CONSTRAINT IF EXISTS periods_status_check;

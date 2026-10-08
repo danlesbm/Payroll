@@ -3,7 +3,7 @@ const pad = n => String(n).padStart(2, '0');
 const dim = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const r2 = n => Math.round(n * 100) / 100;
-const { PREMIUM_METHOD, NIGHT_OT_EXTRA } = require('./premium-method');
+const { DEFAULT_METHOD, NIGHT_OT_EXTRA } = require('./premium-method');
 const EPS = 1e-9;
 
 // Ngày nghỉ hằng tuần (0 = Chủ nhật … 6 = Thứ bảy)
@@ -73,12 +73,12 @@ function shiftGroupMin(rows) {
  *  Mỗi ngày công: c = %ký hiệu ÷ 100 (theo nhóm phụ cấp, mặc định 1), h = %ngày lễ ÷ 100 (mặc định 1).
  *  Phụ cấp của ký hiệu (vd làm đêm 30%) = cơ sở × (c − 1); cơ sở = công đêm (nhóm 'night') hoặc toàn bộ công ('extra').
  *  Phần lễ = công × (h − 1) (+ phụ cấp sửa chữa × (h − 1)).
- *  Phụ cấp đêm × % lễ / % tăng ca: tuỳ phương án (src/lib/premium-method.js; o.method ghi đè khi kiểm thử):
+ *  Phần đêm của công lễ / vượt chuẩn: tuỳ phương pháp o.method (Cấu hình › settings.premium_method, xem src/lib/premium-method.js):
  *    B (Excel): KHÔNG cộng ở đây — calcLine tính tiền lễ / tăng ca trên đơn giá đã gồm tiền đêm bình quân. K1,3 ngày lễ 300%: đêm 0,3, lễ 4.
  *    A (NĐ 145/2020 Điều 57): công đêm của ngày lễ / phần vượt chuẩn được thêm 20% × đơn giá ban ngày của công đó
  *      (20% × h vào lễ, 20% × otMult vào làm thêm). K1,3 ngày lễ 300%: đêm 0,3, lễ 2 + 2 + 0,6 = 4,6. */
 function premiumDays(entries, o) {
-  const out = { night: 0, extra: 0, holiday: 0 }, methodA = (o.method || PREMIUM_METHOD) === 'A';
+  const out = { night: 0, extra: 0, holiday: 0 }, methodA = (o.method || DEFAULT_METHOD) === 'A';
   const std = num(o.std), otM = num(o.otMult); let cum = 0;
   const list = [...(entries || [])].sort((a, b) => num(a.day) - num(b.day));
   for (const e of list) {

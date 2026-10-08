@@ -1,6 +1,6 @@
 // Công thức tính lương — hàm thuần, dễ kiểm thử.
 const { payRatio } = require('./workdays');
-const { PREMIUM_METHOD } = require('./premium-method');
+const { methodOf } = require('./premium-method');
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const round = n => Math.round(num(n));
 const ymd = v => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
@@ -108,7 +108,7 @@ function calcLine(i) {
   // Phương án B (Excel nhà máy): làm thêm (công vượt chuẩn) và làm lễ tính trên đơn giá ngày ĐÃ GỒM tiền làm đêm bình quân của tháng:
   // (lương + thưởng + phụ cấp + tiền làm đêm) ÷ công chuẩn × số công × % → hệ số (1 + công đêm tương đương ÷ công chuẩn).
   // Phương án A (Thông tư): hệ số = 1, phần đêm × % lễ / tăng ca đã nằm trong premiumDays. Xem src/lib/premium-method.js.
-  const premiumMethod = i.premiumMethod || PREMIUM_METHOD, methodA = premiumMethod === 'A';
+  const premiumMethod = methodOf(i.premiumMethod), methodA = premiumMethod === 'A';
   const nfS = !methodA && div > 0 ? 1 + num(pd.night) / div : 1, nfB = !methodA && div > 0 ? 1 + num(pdB.night) / div : 1;
   const otSalaryAmt = round(premBaseS * overS * nfS), otBonusAmt = round(bonusCoef * num(i.unitPrice) * overB * lf * pf * nfB);
   const bonusBase = round(bonusCoef * num(i.unitPrice) * mainB * lf * pf);

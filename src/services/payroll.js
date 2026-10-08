@@ -4,6 +4,7 @@ const { isReceived, STATUS_LABEL } = require('../lib/workflow');
 const { monthEnd } = require('../lib/dates');
 const calc = require('../lib/calc');
 const { empTypeName } = require('../lib/emptypes');
+const { methodOf } = require('../lib/premium-method');
 const sched = require('./schedule');
 const { safetyHolders } = require('./safety');
 const workdaysLib = require('../lib/workdays');
@@ -54,7 +55,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
     q(c, 'SELECT * FROM unit_prices WHERE effective_from <= $1', [end]),
     q(c, 'SELECT employee_id, kind, label, calc, basis, value, amount FROM monthly_items WHERE year=$1 AND month=$2 ORDER BY id', [year, month]),
     q(c, 'SELECT id, employee_id, effective_from, vals FROM coefficient_history WHERE employee_id = ANY($1::uuid[]) AND effective_from <= $2', [ids, end]),
-    q(c, `SELECT key, value FROM settings WHERE key IN ('standard_days','meal_in_net','safety_coef')`),
+    q(c, `SELECT key, value FROM settings WHERE key IN ('standard_days','meal_in_net','safety_coef','premium_method')`),
     q(c, `SELECT pe.employee_id, pr.safety, pr.labor, s.use_safety, s.use_labor FROM period_employees pe JOIN periods p ON p.id=pe.period_id JOIN sheets s ON s.id=p.sheet_id
           LEFT JOIN period_ratings pr ON pr.period_id=pe.period_id AND pr.employee_id=pe.employee_id WHERE s.group_id=$1 AND p.year=$2 AND p.month=$3`, [groupId, year, month]),
     q(c, 'SELECT grade, factor FROM labor_grades'), q(c, 'SELECT grade, factor FROM safety_grades'),
@@ -73,6 +74,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
   const planFactor = (await q(c, 'SELECT factor FROM plan_factors WHERE year=$1 AND month=$2', [year, month]))[0]?.factor;
   const pfNum = planFactor === undefined || planFactor === null ? 1 : calc.num(planFactor);
   const mealInNet = String(setting.meal_in_net ?? 'true') !== 'false';
+  const premiumMethod = methodOf(setting.premium_method);   // phương pháp tính làm lễ / làm thêm (Cấu hình): A = NĐ 145/2020, B = quy chế lương riêng
 
   const codeWork = Object.fromEntries(codes.map(r => [r.code, r.work_value]));
   const kindOf = Object.fromEntries(codes.filter(r => r.pct_kind).map(r => [r.code, r.pct_kind]));
@@ -116,7 +118,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
     const zeroed = rawE.length - keep.length;
     const otCnt = keep.filter(x => otSet.has(x.code) && scopeOf[x.code] !== 'none').reduce((n, x) => n + calc.num(codeWork[x.code]), 0);
     const pctOf = code => rateOf.get(code + '|' + (e.allowance_group_id || '')) ?? rateOf.get(code + '|') ?? 100;
-    const premOpt = (skipScope, otMult) => ({ std, otMult, work: workOf, kind: kindFull, ot: cd => otSet.has(cd), pct: pctOf,
+    const premOpt = (skipScope, otMult) => ({ std, otMult, method: premiumMethod, work: workOf, kind: kindFull, ot: cd => otSet.has(cd), pct: pctOf,
       holPct: day => sctx.pct.get(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`) || 100, skip: x => (offZero.has(x.code) && sc.offSet.has(x.day)) || scopeOf[x.code] === skipScope || scopeOf[x.code] === 'none' });
     const prem = workdaysLib.premiumDays(rawE, premOpt('bonus', sc.otSalary)), premB = workdaysLib.premiumDays(rawE, premOpt('salary', sc.otBonus));
     // Kiểu ăn ca của bộ phận: auto = theo ký hiệu công; actual = chỉ theo bảng chấm ăn ca riêng; auto_wait = theo ký hiệu công + bảng chấm ăn chờ ca
@@ -129,7 +131,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
     const its = itemByEmp.get(e.id) || [];
     const baseWage = baseOf[e.employee_type];
     const warnings = []; if (!coefRow) warnings.push('Chưa có hệ số'); if (!price) warnings.push('Chưa có đơn giá lương');
-    const r = calc.calcLine({ workDays: wd, workDaysBonus: wdB, standardDays: std, minDays: minD, rateBasis: sc.basis, planFactor: pfNum, premiumDays: prem, premiumDaysBonus: premB, otSalary: sc.otSalary, otBonus: sc.otBonus, baseWage, coefTypes, coefs: coefRow?.vals || {}, unitPrice: price?.amount || 0,
+    const r = calc.calcLine({ workDays: wd, workDaysBonus: wdB, standardDays: std, minDays: minD, rateBasis: sc.basis, planFactor: pfNum, premiumDays: prem, premiumDaysBonus: premB, premiumMethod, otSalary: sc.otSalary, otBonus: sc.otBonus, baseWage, coefTypes, coefs: coefRow?.vals || {}, unitPrice: price?.amount || 0,
       mealAmount: calc.mealAmount(qty, rateByType) + auto.amount, mealInNet, items: its, deductionTypes: dedTypes,
       laborFactor: laborGrade ? laborF[laborGrade] : 1, safetyCode, safetyFactor: safetyGrade ? safetyF[safetyGrade] : 1 });
     if (needSafety && !safetyGrade) warnings.push('Chưa chấm xếp loại an toàn (đang tính 100% phụ cấp an toàn)');

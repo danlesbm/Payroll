@@ -438,7 +438,10 @@ test('phương án A (NĐ 145/2020 Điều 57): ca đêm ngày lễ / vượt ch
   assert.ok(Math.abs(t.holidaySalary + t.holidayBonus - 3250201) <= 2);
 });
 
-test('phương án đang dùng của nhánh này hợp lệ (A hoặc B)', () => {
-  const { PREMIUM_METHOD } = require('../src/lib/premium-method');
-  assert.ok(PREMIUM_METHOD === 'A' || PREMIUM_METHOD === 'B');
+test('phương pháp tính làm lễ / làm thêm: mặc định quy chế lương riêng (B), giá trị lạ về B', () => {
+  const { METHODS, DEFAULT_METHOD, methodOf } = require('../src/lib/premium-method');
+  assert.equal(DEFAULT_METHOD, 'B');
+  assert.equal(methodOf('A'), 'A'); assert.equal(methodOf('B'), 'B'); assert.equal(methodOf(undefined), 'B'); assert.equal(methodOf('x'), 'B'); assert.equal(methodOf('toString'), 'B');
+  assert.match(METHODS.A, /145\/2020/); assert.equal(METHODS.B, 'Theo quy chế lương riêng');
+  assert.equal(c.calcLine({ standardDays: 24, workDays: 24 }).premiumMethod, 'B');
 });

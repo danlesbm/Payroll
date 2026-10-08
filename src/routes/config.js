@@ -190,7 +190,8 @@ const SETTING_KEYS = {
   plant_title_head: v => String(v ?? '').trim().slice(0, 60),
   plant_title_deputy: v => String(v ?? '').trim().slice(0, 60),
   safety_coef: v => String(v ?? ''),
-  require_l1: v => String(v === true || v === 'true')
+  require_l1: v => String(v === true || v === 'true'),
+  premium_method: v => (v === 'A' || v === 'B' ? v : bad('Phương pháp tính tiền làm lễ, làm thêm không hợp lệ'))
 };
 router.put('/settings', api(async req => {
   admin(req);
@@ -199,7 +200,7 @@ router.put('/settings', api(async req => {
   if (Number(clean.year_min) && Number(clean.year_max) && Number(clean.year_min) > Number(clean.year_max)) bad('Năm nhỏ nhất phải ≤ năm lớn nhất');
   for (const [k, v] of Object.entries(clean)) await pool.query(`INSERT INTO settings(key, value, updated_by) VALUES($1,$2,$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [k, v, req.auth.user.id]);
   if ('exclude_patterns' in clean) await applyExclusions(pool);
-  if ('standard_days' in clean || 'meal_in_net' in clean) await staleAll();
+  if ('standard_days' in clean || 'meal_in_net' in clean || 'premium_method' in clean) await staleAll();
   await audit(req, 'settings.update', 'settings', null, clean);
   return { ok: true };
 }));

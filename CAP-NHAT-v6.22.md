@@ -11,6 +11,10 @@ Chức danh in trên bảng chấm công, bảng lương, bảng thưởng, bả
 - *Quản trị › Nhân sự*: cột **Chức danh** là ô nhập. Chữ mờ trong ô là chức danh tự động; gõ vào để sửa tay, xoá trắng để về tự động. Bấm **Lưu thay đổi**. Có thể **Hoàn tác** như các cột khác.
 - Đổi chức danh không cần "Tính lại" bảng lương (chức danh lấy lúc xem / xuất).
 
-## Phương án A / B cho tiền làm lễ, làm thêm của ca đêm
-- Công thức đang dùng (B, theo Excel nhà máy) không đổi.
-- Có thêm nhánh dự phòng **`theo-tt`** tính theo phương án A (Thông tư: ca đêm ngày lễ 390%, ca đêm tăng ca 260%). Hai nhánh chỉ khác 1 dòng trong `src/lib/premium-method.js`. Cách cập nhật và chuyển server giữa 2 nhánh: xem `NHANH-THEO-TT.md`.
+## Chọn phương pháp tính tiền làm lễ, làm thêm (v6.23)
+- Admin › Cấu hình có thẻ mới **Phương pháp tính tiền làm lễ, làm thêm**, chọn một trong hai, có diễn giải công thức ngay tại chỗ:
+  - **Theo Nghị định 145/2020/NĐ-CP** (Bộ luật Lao động 2019 Điều 98): ca đêm ngày lễ 300% = 390%, ca đêm vượt chuẩn tăng ca 200% = 270%.
+  - **Theo quy chế lương riêng** (như bảng Excel nhà máy): tiền làm đêm bình quân cộng vào đơn giá ngày tính lễ / vượt chuẩn. **Mặc định, giữ nguyên số liệu đang dùng.**
+- Đổi phương pháp thì các bảng lương nháp được đánh dấu cần **Tính lại**; bảng đã khoá giữ số cũ.
+- Phương án A trước đây tính phụ cấp đêm × % lễ (lễ 400% ra 520%, tăng ca ×2 ra 260%); nay tính đúng Điều 57 NĐ 145/2020 (thêm 20% đơn giá ban ngày): lễ 400% ra 510%, tăng ca ×2 ra 270%. Lễ 300% vẫn 390%.
+- Hai nhánh dự phòng (đóng băng, không có thẻ chọn): `theo-tt` chỉ tính A, `quy-che-rieng` chỉ tính B. Xem `NHANH-THEO-TT.md`.

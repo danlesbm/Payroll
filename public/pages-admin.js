@@ -306,6 +306,26 @@ async function admCfg(me, box, reload) {
     <div class="row"><label>Ở nhà máy, "Trưởng phòng" in là</label><input id="s_th" style="width:190px" value="${esc(s.plant_title_head ?? 'Giám đốc NM')}"><label>"Phó phòng" in là</label><input id="s_td" style="width:190px" value="${esc(s.plant_title_deputy ?? 'P. Giám đốc NM')}"><span class="muted small">Chỉ áp dụng cho bảng lương loại Nhà máy; để trống = giữ nguyên chức danh SSO.</span></div>
     <div class="row"><label><input type="checkbox" id="s_l1" ${s.require_l1 !== 'false' ? 'checked' : ''}> Bắt buộc cấp 1 duyệt trước khi gửi văn phòng</label><label><input type="checkbox" id="s_mn" ${s.meal_in_net !== 'false' ? 'checked' : ''}> Cộng tiền ăn vào thực lĩnh</label><button class="btn" id="s_save">Lưu cài đặt</button></div>
     <div class="muted small">Danh sách chọn năm ở mọi trang chạy từ "Năm nhỏ nhất" đến "Năm lớn nhất" — muốn dùng tới năm nào thì tăng "Năm lớn nhất" ở đây.</div></div>
+  <div class="card"><h2>Phương pháp tính tiền làm lễ, làm thêm</h2>
+    <div class="muted small">Hai phương pháp chỉ khác nhau ở <b>tiền làm lễ, tết</b> và <b>tiền công vượt chuẩn</b> khi có ca đêm. Lương, thưởng, tiền làm đêm 30%, bảo hiểm, ăn ca, ký hiệu làm thêm (LT…) và phụ cấp sửa chữa tính như nhau. Đổi phương pháp xong bấm <b>Tính lại</b> các bảng lương nháp; bảng đã khoá giữ nguyên số cũ. Popup chi tiết từng người ghi rõ đang tính theo phương pháp nào.</div>
+    <div class="small" style="margin:6px 0">Ký hiệu dùng chung: <b>Đơn giá ngày</b> = (lương bảo hiểm + phụ cấp + thưởng) ÷ công tối thiểu (hoặc công chuẩn). <b>% lễ</b> cài ở lịch ngày lễ (vd 300%), <b>% tăng ca</b> là hệ số trả cho công vượt chuẩn (vd 200%), <b>30% làm đêm</b> cài ở ký hiệu công.</div>
+    <label style="display:block;margin-top:8px"><input type="radio" name="s_pm" value="A" ${s.premium_method === 'A' ? 'checked' : ''}> <b>Theo Nghị định 145/2020/NĐ-CP</b> (hướng dẫn Điều 98 Bộ luật Lao động 2019): tính theo từng ca</label>
+    <ul class="small" style="margin:4px 0 0 22px">
+      <li>Tiền làm đêm = đơn giá ngày × công đêm × 30%</li>
+      <li>Tiền làm lễ = đơn giá ngày × công lễ × (% lễ − 100%) + đơn giá ngày × công đêm ngày lễ × 20% × % lễ</li>
+      <li>Tiền công vượt chuẩn = đơn giá ngày × công vượt chuẩn × % tăng ca + đơn giá ngày × công đêm vượt chuẩn × 20% × % tăng ca</li>
+      <li>Ví dụ: ca ngày ngày lễ 300% = <b>300%</b>; ca đêm ngày lễ 300% = 300% + 30% + 20% × 300% = <b>390%</b>; ca đêm vượt chuẩn (tăng ca 200%) = 200% + 30% + 20% × 200% = <b>270%</b>.</li>
+      <li>Căn cứ: Điều 98 Bộ luật Lao động 2019; Điều 55, 56, 57 Nghị định 145/2020/NĐ-CP (làm thêm giờ vào ban đêm được trả thêm 20% tiền lương làm việc ban ngày của ngày đó).</li>
+    </ul>
+    <label style="display:block;margin-top:8px"><input type="radio" name="s_pm" value="B" ${s.premium_method !== 'A' ? 'checked' : ''}> <b>Theo quy chế lương riêng</b> (như bảng Excel nhà máy): tiền làm đêm bình quân cộng vào đơn giá</label>
+    <ul class="small" style="margin:4px 0 0 22px">
+      <li>Tiền làm đêm = đơn giá ngày × công đêm × 30% (như trên)</li>
+      <li>Đơn giá ngày có đêm = (lương bảo hiểm + phụ cấp + thưởng + tiền làm đêm cả tháng) ÷ công tối thiểu</li>
+      <li>Tiền làm lễ = đơn giá ngày có đêm × công lễ × (% lễ − 100%)</li>
+      <li>Tiền công vượt chuẩn = đơn giá ngày có đêm × công vượt chuẩn × % tăng ca</li>
+      <li>Ca đêm ngày lễ không cộng riêng phần đêm theo ca; thay vào đó mọi công lễ / vượt chuẩn (cả ca ngày) tính trên đơn giá đã gồm tiền đêm bình quân của tháng. Tương ứng bảng Excel: T = công đêm × S × 30% ÷ 22, U = (S + T) × công làm thêm × 2 ÷ 22, với S = lương + thưởng + phụ cấp.</li>
+    </ul>
+    <div class="row" style="margin-top:8px"><button class="btn" id="pm_save">Lưu phương pháp tính</button></div></div>
   <div class="card"><h2>Loại trừ tài khoản dùng chung</h2><div class="muted small">Mỗi dòng một cụm từ (không phân biệt hoa thường). Ai có <b>tên, tài khoản hoặc email</b> chứa cụm từ này sẽ bị loại khỏi mọi bảng chấm công / lương khi đồng bộ từ SSO (vd tài khoản Admin, email chung của từng nhà máy/phòng). Chỉ so với <b>tên người</b> (phần trước dấu " - ", không gồm chức danh), tài khoản và email. Ví dụ: <code>admin</code>, <code>@phong-</code>. Đừng nhập tên nhà máy (vd NMTĐ Suối Sập 3) vì sẽ trùng cả nhân viên.</div>
     <textarea id="s_ex" rows="5" style="width:100%;margin-top:6px" placeholder="admin&#10;@phong-">${esc(s.exclude_patterns || '')}</textarea>
     <div class="row" style="margin-top:6px"><button class="btn" id="s_exsave">Lưu &amp; áp dụng ngay</button>${(c.excludeCounts || []).length ? `<div class="small" style="margin:6px 0">${c.excludeCounts.map(x => `<span class="chip" style="background:${x.count > 3 ? '#fee2e2' : '#e5e7eb'}">${esc(x.pattern)} → loại ${x.count} người</span>`).join(' ')} ${c.excludeCounts.some(x => x.count > 3) ? '<b style="color:#b91c1c">Cụm đỏ loại nhiều người: kiểm tra xem có loại nhầm nhân viên không.</b>' : ''}</div>` : ''}<span class="muted small">Đang loại ${(c.excluded || []).length} tài khoản${(c.excluded || []).length ? ': ' + (c.excluded || []).slice(0, 30).map(x => esc(x.name)).join(', ') + ((c.excluded || []).length > 30 ? '…' : '') : ''}</span></div></div>
@@ -337,6 +357,7 @@ async function admCfg(me, box, reload) {
     box.querySelectorAll(':scope > .card').forEach(cd => { const h = cd.querySelector('h2'); if (!h || !keep.some(k => h.textContent.trim().startsWith(k))) cd.style.display = 'none'; });
   }
   $('#s_save').onclick = guard(async () => { await PUT('/api/config/settings', { company_name: $('#s_cn').value, year_min: $('#s_y0').value, year_max: $('#s_y1').value, place: $('#s_pl').value, plant_title_head: $('#s_th').value, plant_title_deputy: $('#s_td').value, require_l1: $('#s_l1').checked, meal_in_net: $('#s_mn').checked }); toast('Đã lưu. Tải lại trang để áp dụng danh sách năm.'); });
+  $('#pm_save').onclick = guard(async () => { const v = box.querySelector('[name=s_pm]:checked')?.value; if (!v) return toast('Chọn một phương pháp tính'); await PUT('/api/config/settings', { premium_method: v }); toast('Đã lưu. Bấm Tính lại các bảng lương nháp để áp dụng.'); reload(); });
   $('#s_exsave').onclick = guard(async () => { await PUT('/api/config/settings', { exclude_patterns: $('#s_ex').value }); toast('Đã lưu và áp dụng'); reload(); });
   $('#g_save').onclick = guard(async () => { const labor = {}, safety = {}; box.querySelectorAll('[data-lg]').forEach(i => labor[i.dataset.lg] = i.value); box.querySelectorAll('[data-sg]').forEach(i => safety[i.dataset.sg] = Number(i.value) / 100); await PUT('/api/config/settings', { safety_coef: $('#s_sc').value }); await PUT('/api/config/grades', { labor, safety }); toast('Đã lưu xếp loại'); });
   const yn = [{ v: 'true', t: 'Đang dùng' }, { v: 'false', t: 'Ngừng' }];
