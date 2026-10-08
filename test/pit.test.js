@@ -30,6 +30,10 @@ test('biểu thuế động: chuẩn hoá, bậc cuối luôn không giới hạ
   assert.throws(() => P.validateBrackets([]), /ít nhất 1 bậc/);
   assert.throws(() => P.validateBrackets([{ upto: 100, rate: 5 }, { upto: 50, rate: 10 }, { upto: null, rate: 20 }]), /lớn hơn bậc 1/);
   assert.throws(() => P.validateBrackets([{ upto: 100, rate: 120 }]), /0 đến 100/);
+  // Thuế suất để trống / null không được coi là 0%; mức trần vô hạn (1e400) không được làm mất bậc
+  assert.throws(() => P.validateBrackets([{ upto: 100, rate: '' }, { rate: 10 }]), /Bậc 1: thuế suất/);
+  assert.throws(() => P.validateBrackets([{ upto: 100, rate: 5 }, { rate: null }]), /Bậc 2: thuế suất/);
+  assert.throws(() => P.validateBrackets([{ upto: '1e400', rate: 5 }, { rate: 10 }]), /Bậc 1: cần nhập mức/);
   // 1 bậc duy nhất: thuế suất phẳng
   assert.equal(P.progressive(1000, [{ upto: null, rate: 10 }]).tax, 100);
   // 3 bậc khác hẳn (luật sau này đổi): vẫn tính đúng

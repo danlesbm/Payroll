@@ -25,10 +25,11 @@ function normBrackets(list) {
 function validateBrackets(list) {
   if (!Array.isArray(list) || !list.length) throw new Error('Biểu thuế phải có ít nhất 1 bậc');
   if (list.length > 20) throw new Error('Biểu thuế tối đa 20 bậc');
+  const blank = v => v === null || v === undefined || (typeof v === 'string' && !v.trim());
   list.forEach((b, i) => {
     const r = Number(b?.rate), last = i === list.length - 1, u = b?.upto;
-    if (!Number.isFinite(r) || r < 0 || r > 100) throw new Error(`Bậc ${i + 1}: thuế suất phải từ 0 đến 100%`);
-    if (!last && !(Number(u) > 0)) throw new Error(`Bậc ${i + 1}: cần nhập mức thu nhập tính thuế tối đa của bậc (cả năm)`);
+    if (blank(b?.rate) || !Number.isFinite(r) || r < 0 || r > 100) throw new Error(`Bậc ${i + 1}: thuế suất phải từ 0 đến 100%`);
+    if (!last && (blank(u) || !Number.isFinite(Number(u)) || !(Number(u) > 0) || Number(u) > 1e13)) throw new Error(`Bậc ${i + 1}: cần nhập mức thu nhập tính thuế tối đa của bậc (cả năm)`);
     if (!last && i > 0 && Number(u) <= Number(list[i - 1].upto)) throw new Error(`Bậc ${i + 1}: mức tối đa phải lớn hơn bậc ${i}`);
   });
   return normBrackets(list.map((b, i) => ({ upto: i === list.length - 1 ? null : Number(b.upto), rate: Number(b.rate) })));

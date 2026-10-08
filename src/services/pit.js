@@ -34,31 +34,43 @@ function monthTaxes(linesByMonth, ctx) {
     const stored = ls.every(l => l.has_pit);
     const dependents = P.dependentsInMonth(ctx.deps, ctx.year, month);
     const tax = stored ? ls.reduce((s, l) => s + num(l.pit_tax), 0) : P.monthlyPit({ taxable, insurance, dependents, extrasYear: ctx.extras, schedule: ctx.schedule }).tax;
-    out[month] = { taxable, insurance, dependents: stored ? num(ls[0].pit_dependents ?? dependents) : dependents, tax, source: stored ? 'stored' : 'estimate', lines: ls.length, locked: ls.every(l => l.status === 'locked') };
+    // withheld: thuế tháng đó đã thực trừ vào thưởng / lương (cài đặt "Trừ vào thưởng" lúc tính lương tháng đó)
+    out[month] = { taxable, insurance, dependents: stored ? num(ls[0].pit_dependents ?? dependents) : dependents, tax, source: stored ? 'stored' : 'estimate', withheld: stored && ls.every(l => l.pit_withheld === true), lines: ls.length, locked: ls.every(l => l.status === 'locked') };
   }
   return out;
 }
 
+const EDITABLE = new Set(['draft', 'submitted']);   // bảng lương còn tính lại được; đã trình Giám đốc / đã khoá thì số thuế đã lưu là cố định
 /** Gắn thuế TNCN vào các dòng lương theo hệ số của 1 bảng lương trong 1 tháng (gọi trong calculateRun trước khi ghi dòng).
  *  lines = [{ employeeId, r, detail }] — r là kết quả calcLine; hàm cập nhật r / detail và trả về { taxable, tax } để ghi cột pit_taxable / pit_tax. */
 async function applyRunPit(c, { groupId, year, month, lines, prevRunId, withhold }) {
-  const out = new Map();
-  if (!lines.length) return out;
+  const out = new Map(), ids = lines.map(l => l.employeeId), idSet = new Set(ids), staleRuns = new Set();
+  const prevRows = prevRunId ? await q(c, `SELECT pl.employee_id, pl.pit_taxable FROM payroll_lines pl WHERE pl.run_id=$1 AND ${NOT_FIXED}`, [prevRunId]) : [];
+  // Người có ở lần tính trước nhưng nay không còn dòng (bỏ khỏi bảng chấm công, thôi tính lương, chuyển lương khoán…):
+  // phần thuế chia ở bảng lương khác cùng tháng và quyết toán tháng 12 của họ đổi theo → đánh dấu cần tính lại
+  const removed = [...new Set(prevRows.map(r => r.employee_id))].filter(id => !idSet.has(id));
+  if (removed.length) for (const r of await q(c, `SELECT DISTINCT r.id FROM payroll_runs r JOIN payroll_lines pl ON pl.run_id=r.id
+      WHERE r.year=$1 AND ((r.month=$3::int AND r.group_id<>$2) OR ($3::int < 12 AND r.month=12)) AND pl.employee_id = ANY($4::uuid[])`, [year, groupId, month, removed])) staleRuns.add(r.id);
+  if (lines.length) await pitLines(c, { groupId, year, month, lines, ids, prevRows, withhold, out, staleRuns });
+  if (staleRuns.size) await c.query(`UPDATE payroll_runs SET stale=true WHERE id = ANY($1::uuid[]) AND status IN ('draft','submitted')`, [[...staleRuns]]);
+  // Tính lại tháng 1–11 → quyết toán tháng 12 (nếu đã chạy, chưa khoá) cần tính lại
+  if (month < 12 && ids.length) await c.query(`UPDATE payroll_runs r SET stale=true WHERE r.year=$1 AND r.month=12 AND r.status IN ('draft','submitted')
+      AND EXISTS (SELECT 1 FROM payroll_lines pl WHERE pl.run_id=r.id AND pl.employee_id = ANY($2::uuid[]))`, [year, ids]);
+  return out;
+}
+async function pitLines(c, { groupId, year, month, lines, ids, prevRows, withhold, out, staleRuns }) {
   const schedule = await scheduleFor(c, year);
   const codes = await deductibleCodes(c);
-  const ids = lines.map(l => l.employeeId);
   // Truy vấn tuần tự (cùng một client giao dịch không chạy song song được)
   const deps = await dependentsOf(c, ids), extras = await extrasOf(c, ids, year);
   // Cùng tháng ở bảng lương khác (người chuyển bảng lương trong tháng): thuế tính trên tổng thu nhập của người, chia theo tỷ lệ
-  const others = await q(c, `SELECT pl.employee_id, r.group_id, r.id AS run_id, pl.insurance_salary, pl.allowance, pl.bonus, pl.detail->'deductions' AS deductions
+  const others = await q(c, `SELECT pl.employee_id, r.group_id, r.id AS run_id, r.status, pl.pit_tax, pl.insurance_salary, pl.allowance, pl.bonus, pl.detail->'deductions' AS deductions
           FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id WHERE r.year=$1 AND r.month=$2 AND r.group_id<>$3 AND pl.employee_id = ANY($4::uuid[]) AND ${NOT_FIXED}`, [year, month, groupId, ids]);
-  const prevRows = prevRunId ? await q(c, 'SELECT employee_id, pit_taxable FROM payroll_lines WHERE run_id=$1', [prevRunId]) : [];
   const prior = month === 12 ? await q(c, `SELECT r.month, r.status, pl.employee_id, pl.insurance_salary, pl.allowance, pl.bonus, pl.detail->'deductions' AS deductions, pl.pit_tax,
-        (pl.detail ? 'pit') AS has_pit, (pl.detail->'pit'->>'dependents')::numeric AS pit_dependents
+        (pl.detail ? 'pit') AS has_pit, (pl.detail->'pit'->>'dependents')::numeric AS pit_dependents, (pl.detail->'pit'->>'withheld')::boolean AS pit_withheld
       FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id WHERE r.year=$1 AND r.month < 12 AND pl.employee_id = ANY($2::uuid[]) AND ${NOT_FIXED}`, [year, ids]) : [];
   const group = (list, key) => { const m = new Map(); for (const x of list) (m.get(x[key]) || m.set(x[key], []).get(x[key])).push(x); return m; };
   const othersBy = group(others, 'employee_id'), priorBy = group(prior, 'employee_id'), prevTaxable = new Map(prevRows.map(r => [r.employee_id, r.pit_taxable === null ? null : num(r.pit_taxable)]));
-  const staleRuns = new Set();
   for (const l of lines) {
     const r = l.r, id = l.employeeId;
     const lineTaxable = P.taxableOf({ insurance_salary: r.insuranceSalary, allowance: r.allowance, bonus: r.bonus });
@@ -73,30 +85,32 @@ async function applyRunPit(c, { groupId, year, month, lines, prevRunId, withhold
     let total = m.tax, annual = null, months = null;
     if (month === 12) {
       months = monthTaxes(group(priorBy.get(id) || [], 'month'), { codes, deps: depList, year, extras: ex, schedule });
-      const ms = Object.values(months);
-      annual = P.annualPit({ taxable: ms.reduce((s, x) => s + x.taxable, 0) + taxable, insurance: ms.reduce((s, x) => s + x.insurance, 0) + insurance,
-        dependentMonths: depMonthsOfYear(depList, year), extrasYear: ex, schedule, priorTax: ms.reduce((s, x) => s + x.tax, 0) });
+      const ms = Object.values(months), estimated = ms.reduce((s, x) => s + x.tax, 0), withheld = ms.reduce((s, x) => s + (x.withheld ? x.tax : 0), 0);
+      // Đang trừ thuế vào thưởng: quyết toán = thuế cả năm − số ĐÃ THỰC TRỪ tháng 1–11 (tháng chỉ ước tính, chưa trừ thì thu nốt ở tháng 12)
+      annual = Object.assign(P.annualPit({ taxable: ms.reduce((s, x) => s + x.taxable, 0) + taxable, insurance: ms.reduce((s, x) => s + x.insurance, 0) + insurance,
+        dependentMonths: depMonthsOfYear(depList, year), extrasYear: ex, schedule, priorTax: withhold === 'bonus' ? withheld : estimated }), { priorBasis: withhold === 'bonus' ? 'withheld' : 'estimate', priorEstimated: estimated });
       total = annual.settle;
     }
-    // Chia cho các dòng cùng tháng theo thứ tự bảng lương (cố định để mọi bảng chia giống nhau)
-    const parts = [{ groupId, taxable: lineTaxable }, ...oth.map(x => ({ groupId: x.group_id, taxable: P.taxableOf(x) }))].sort((a, b) => String(a.groupId).localeCompare(String(b.groupId)));
-    const share = P.allocate(total, parts.map(p => p.taxable))[parts.findIndex(p => p.groupId === groupId)];
+    // Bảng lương khác cùng tháng đã trình Giám đốc / đã khoá: giữ nguyên phần thuế đã lưu ở đó; phần còn lại chia cho các bảng còn tính lại được
+    // theo tỷ lệ thu nhập chịu thuế, theo thứ tự bảng lương (cố định để mọi bảng chia giống nhau)
+    const fixedTax = oth.filter(x => !EDITABLE.has(x.status)).reduce((s, x) => s + num(x.pit_tax), 0);
+    const parts = [{ groupId, taxable: lineTaxable }, ...oth.filter(x => EDITABLE.has(x.status)).map(x => ({ groupId: x.group_id, taxable: P.taxableOf(x) }))].sort((a, b) => String(a.groupId).localeCompare(String(b.groupId)));
+    const share = P.allocate(total - fixedTax, parts.map(p => p.taxable))[parts.findIndex(p => p.groupId === groupId)];
     l.detail.pit = { scheduleYear: schedule.year, month, lineTaxable, lineInsurance, lineTax: share, exempt, extrasYear: ex,
-      ...m, monthTax: m.tax, tax: total, annual, months, shared: oth.length ? { lines: oth.length + 1, taxable, insurance } : null, withheld: withhold === 'bonus' };
+      ...m, monthTax: m.tax, tax: total, annual, months, shared: oth.length ? { lines: oth.length + 1, taxable, insurance, fixedTax, fixedLines: oth.length + 1 - parts.length } : null, withheld: withhold === 'bonus' };
     if (withhold === 'bonus' && share) {
-      r.bonusDeduction += share; r.bonusNet -= share; r.net -= share;
-      r.extraDetail.push({ kind: 'bonus_deduction', label: month === 12 ? 'Thuế TNCN (quyết toán năm)' : 'Thuế TNCN (tạm tính)', calc: 'pit', basis: null, value: 0, amount: share });
-      Object.assign(l.detail, { bonusDeduction: r.bonusDeduction, bonusNet: r.bonusNet, extras: r.extraDetail });
+      // Trừ vào thưởng thực nhận; thưởng tháng đó không đủ thì phần còn lại trừ vào lương thực lĩnh (không để thưởng thực nhận âm). Số âm (được hoàn) cộng vào thưởng.
+      const label = month === 12 ? 'Thuế TNCN (quyết toán năm)' : 'Thuế TNCN (tạm tính)';
+      const fromBonus = share > 0 ? Math.min(share, Math.max(0, r.bonusNet)) : share, rest = share - fromBonus;
+      if (fromBonus) { r.bonusDeduction += fromBonus; r.bonusNet -= fromBonus; r.extraDetail.push({ kind: 'bonus_deduction', label, calc: 'pit', basis: null, value: 0, amount: fromBonus }); }
+      if (rest) { r.monthlyDeduction += rest; r.deduction += rest; r.salaryNet -= rest; r.extraDetail.push({ kind: 'deduction', label: label + ' — phần thưởng không đủ trừ', calc: 'pit', basis: null, value: 0, amount: rest }); }
+      r.net -= share;
+      Object.assign(l.detail, { bonusDeduction: r.bonusDeduction, bonusNet: r.bonusNet, monthlyDeduction: r.monthlyDeduction, salaryNet: r.salaryNet, extras: r.extraDetail });
     }
     out.set(id, { taxable: lineTaxable, tax: share });
     // Thu nhập của dòng này đổi → phần chia ở bảng lương khác cùng tháng đổi theo: đánh dấu các bảng đó cần tính lại
     if (oth.length && prevTaxable.get(id) !== lineTaxable) for (const x of oth) staleRuns.add(x.run_id);
   }
-  if (staleRuns.size) await c.query(`UPDATE payroll_runs SET stale=true WHERE id = ANY($1::uuid[]) AND status IN ('draft','submitted')`, [[...staleRuns]]);
-  // Tính lại tháng 1–11 → quyết toán tháng 12 (nếu đã chạy, chưa khoá) cần tính lại
-  if (month < 12) await c.query(`UPDATE payroll_runs r SET stale=true WHERE r.year=$1 AND r.month=12 AND r.status IN ('draft','submitted')
-      AND EXISTS (SELECT 1 FROM payroll_lines pl WHERE pl.run_id=r.id AND pl.employee_id = ANY($2::uuid[]))`, [year, ids]);
-  return out;
 }
 
 /** Đánh dấu "cần tính lại" các bảng lương chưa khoá có người này, từ năm fromYear (đổi người phụ thuộc / giảm trừ theo năm). */
@@ -114,11 +128,11 @@ async function yearSummary(c, { year, employeeIds = null, groupIds = null, locke
   let ids = employeeIds;
   if (!ids) ids = (await q(c, `SELECT DISTINCT pl.employee_id FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id WHERE r.year=$1 AND ${NOT_FIXED} ${st} ${groupIds ? 'AND r.group_id = ANY($2::uuid[])' : ''}`, groupIds ? [year, groupIds] : [year])).map(r => r.employee_id);
   if (!ids.length) return { year, schedule, employees: [] };
-  const lines = await q(c, `SELECT r.month, r.status, r.group_id, g.name AS group_name, pl.employee_id, pl.insurance_salary, pl.allowance, pl.bonus, pl.meal_amount, pl.net, pl.pit_tax, pl.pit_taxable,
+  const lines = await q(c, `SELECT r.month, r.status, r.group_id, g.name AS group_name, pl.employee_id, pl.insurance_salary, pl.allowance, pl.bonus, pl.meal_amount, pl.net, pl.pit_tax, pl.pit_taxable, (pl.detail->'pit'->>'withheld')::boolean AS pit_withheld,
             pl.night_salary + pl.night_bonus AS night, pl.extra_salary + pl.extra_bonus AS extra, pl.holiday_salary + pl.holiday_bonus AS holiday,
             pl.detail->'deductions' AS deductions, (pl.detail ? 'pit') AS has_pit, (pl.detail->'pit'->>'dependents')::numeric AS pit_dependents, pl.detail->'pit'->'annual' AS stored_annual
           FROM payroll_lines pl JOIN payroll_runs r ON r.id=pl.run_id JOIN groups g ON g.id=r.group_id WHERE r.year=$1 AND pl.employee_id = ANY($2::uuid[]) AND ${NOT_FIXED} ${st} ORDER BY r.month`, [year, ids]);
-  const emps = await q(c, `SELECT v.id, v.full_name, v.employee_code, v.pay_department_name, v.pay_department_sort, v.group_name, v.emp_order, v.sort_order FROM v_employees v WHERE v.id = ANY($1::uuid[])`, [ids]);
+  const emps = await q(c, `SELECT v.id, v.full_name, v.employee_code, v.pay_department_name, v.pay_department_sort, v.group_id, v.sheet_id, v.group_name, v.emp_order, v.sort_order FROM v_employees v WHERE v.id = ANY($1::uuid[])`, [ids]);
   const deps = await dependentsOf(c, ids), extras = await extrasOf(c, ids, year);
   const byEmp = new Map(); for (const l of lines) (byEmp.get(l.employee_id) || byEmp.set(l.employee_id, []).get(l.employee_id)).push(l);
   const out = [];
@@ -131,27 +145,36 @@ async function yearSummary(c, { year, employeeIds = null, groupIds = null, locke
     const months = schedule ? monthTaxes(early, ctx) : {};
     for (const [m, list] of byMonth) {   // tiền miễn thuế (đêm / thêm / lễ / ăn ca) để hiện trên báo cáo
       const o = months[m] || (months[m] = { taxable: list.reduce((s, l) => s + P.taxableOf(l), 0), insurance: list.reduce((s, l) => s + P.insuranceOf(l.deductions, codes), 0), dependents: P.dependentsInMonth(depList, year, m), tax: null, source: null, lines: list.length, locked: list.every(l => l.status === 'locked') });
-      o.exempt = list.reduce((s, l) => s + num(l.night) + num(l.extra) + num(l.holiday) + num(l.meal_amount), 0);
+      const exOf = l => num(l.night) + num(l.extra) + num(l.holiday) + num(l.meal_amount);
+      o.exempt = list.reduce((s, l) => s + exOf(l), 0);
       o.net = list.reduce((s, l) => s + num(l.net), 0);
       o.groups = [...new Set(list.map(l => l.group_name))];
+      // Theo từng bảng lương (để báo cáo ẩn phần của bảng lương người xem không được phân quyền) — không trả ra ngoài, xem routes/reports.js
+      o.byGroup = {};
+      for (const l of list) { const g = o.byGroup[l.group_id] || (o.byGroup[l.group_id] = { name: l.group_name, taxable: 0, insurance: 0, exempt: 0, net: 0, tax: 0, stored: true });
+        g.taxable += P.taxableOf(l); g.insurance += P.insuranceOf(l.deductions, codes); g.exempt += exOf(l); g.net += num(l.net); g.tax += num(l.pit_tax); g.stored = g.stored && !!l.has_pit; }
     }
-    const prior = Object.entries(months).filter(([m]) => Number(m) < 12).reduce((s, [, x]) => s + num(x.tax), 0);
-    const all = Object.values(months), dec = byMonth.get(12), n = byMonth.size;
+    const dec = byMonth.get(12), n = byMonth.size, all = Object.values(months);
+    // Tháng 12 tính với "Trừ vào thưởng": quyết toán đã trừ theo số ĐÃ THỰC TRỪ tháng 1–11 → so sánh cùng cách
+    const decWithheld = !!(dec && dec.every(l => l.pit_withheld === true));
+    if (decWithheld) for (const [m, x] of Object.entries(months)) if (Number(m) < 12 && !x.withheld) x.notWithheld = true;   // tháng chỉ ước tính, chưa trừ → thu ở quyết toán
+    const prior = Object.entries(months).filter(([m]) => Number(m) < 12).reduce((s, [, x]) => s + (decWithheld && !x.withheld ? 0 : num(x.tax)), 0);
     // Có tháng 12: quyết toán cả năm (bản thân đủ 12 tháng). Chưa có tháng 12: quyết toán DỰ KIẾN theo n tháng đã có lương —
     // bậc thuế, mức tối đa y tế / giáo dục và giảm trừ y tế / giáo dục / khác quy về n/12 năm, bản thân n tháng, người phụ thuộc trong n tháng đó.
     const f = dec ? 1 : n / 12, ks = [...byMonth.keys()];
     const annual = schedule ? Object.assign(P.annualPit({ taxable: all.reduce((s, x) => s + x.taxable, 0), insurance: all.reduce((s, x) => s + x.insurance, 0),
       dependentMonths: dec ? depMonthsOfYear(depList, year) : ks.reduce((s, m) => s + P.dependentsInMonth(depList, year, m), 0), selfMonths: dec ? 12 : n,
-      extrasYear: dec ? ex : { health: ex.health * f, education: ex.education * f, other: ex.other * f }, schedule: dec ? schedule : P.scaleSchedule(schedule, f), priorTax: prior }), { projected: !dec, months: n }) : null;
+      extrasYear: dec ? ex : { health: ex.health * f, education: ex.education * f, other: ex.other * f }, schedule: dec ? schedule : P.scaleSchedule(schedule, f), priorTax: prior }), { projected: !dec, months: n, priorBasis: decWithheld ? 'withheld' : 'estimate' }) : null;
     if (dec && schedule) {   // tháng 12 = quyết toán: dùng số đã lưu khi tính lương; tháng 12 tính trước khi có chức năng thuế thì lấy số quyết toán tính lại
       const stored = dec.every(l => l.has_pit);
       months[12].tax = stored ? dec.reduce((s, l) => s + num(l.pit_tax), 0) : annual.settle;
       months[12].source = stored ? 'stored' : 'estimate';
       months[12].storedAnnualTax = stored ? dec.reduce((s, l) => s + num(l.stored_annual?.tax), 0) / dec.length : null;
     }
-    const paid = Object.values(months).reduce((s, x) => s + num(x.tax), 0);
-    out.push({ employeeId: e.id, name: e.full_name, code: e.employee_code, department: e.pay_department_name, group: e.group_name, sort: [e.group_name || '', e.pay_department_sort ?? 999999, e.emp_order ?? 0, e.sort_order ?? 0, e.full_name],
-      dependents: depList.map(d => ({ name: d.full_name, from: P.ymKey(d.from_month), to: P.ymKey(d.to_month) })), extras: ex, months, annual, taxInMonths: paid,
+    // Tổng thuế các tháng: tháng 12 tính với "Trừ vào thưởng" thì tháng 1–11 chỉ ước tính (chưa trừ) không tính là đã nộp
+    const paid = Object.entries(months).reduce((s, [m, x]) => s + (decWithheld && Number(m) < 12 && !x.withheld ? 0 : num(x.tax)), 0);
+    out.push({ employeeId: e.id, name: e.full_name, code: e.employee_code, department: e.pay_department_name, group: e.group_name, scope: { groupId: e.group_id, sheetId: e.sheet_id }, sort: [e.group_name || '', e.pay_department_sort ?? 999999, e.emp_order ?? 0, e.sort_order ?? 0, e.full_name],
+      dependents: depList.map(d => ({ name: d.full_name, from: P.ymKey(d.from_month), to: P.ymKey(d.to_month) })), extras: ex, months, annual, taxInMonths: paid, decWithheld,
       // Còn phải nộp (+) / được hoàn (−) so với tổng thuế các tháng: 0 khi tháng 12 đã quyết toán đúng
       remaining: annual ? annual.tax - paid : null, settled: !!dec, staleDecember: !!(dec && months[12].source === 'stored' && annual && Math.round(months[12].storedAnnualTax) !== annual.tax) });
   }

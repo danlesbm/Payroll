@@ -35,12 +35,11 @@ async function fundSummary(c, { groupIds, year, from = 1, to = 12, statusSql = '
   // Dòng tính trước khi có quỹ lương: xếp theo cài đặt hiện tại
   const miss = lines.filter(l => !l.fund_id);
   if (miss.length) {
-    const coef = new Map(), fixed = [...new Set(miss.filter(l => l.fixed).map(l => l.employee_id))];
-    for (const l of miss.filter(l => !l.fixed)) (coef.get(l.group_kind) || coef.set(l.group_kind, new Set()).get(l.group_kind)).add(l.employee_id);
-    const res = new Map();
-    for (const [kind, set] of coef) res.set(kind, await resolveFunds(c, [...set], { kind }));
-    const fx = await resolveFunds(c, fixed, {});
-    for (const l of miss) l.fund_id = (l.fixed ? fx : res.get(l.group_kind))?.get(l.employee_id) || null;
+    // Cùng cách xếp như lúc tính: lương hệ số theo loại bảng lương; lương khoán theo bảng lương của bộ phận người đó, không có thì theo loại bảng lương khoán
+    const key = l => `${l.fixed ? 'f' : 'c'}|${l.group_kind || ''}`, by = new Map(), res = new Map();
+    for (const l of miss) (by.get(key(l)) || by.set(key(l), new Set()).get(key(l))).add(l.employee_id);
+    for (const [k, set] of by) { const [t, kind] = k.split('|'); res.set(k, await resolveFunds(c, [...set], t === 'f' ? { fallbackKind: kind || 'plant' } : { kind: kind || null })); }
+    for (const l of miss) l.fund_id = res.get(key(l))?.get(l.employee_id) || null;
   }
   const fundName = new Map(funds.map(f => [f.id, f.name])), fundSort = new Map(funds.map(f => [f.id, f.sort_order]));
   const KEYS = ['insurance_salary', 'allowance', 'bonus', 'premium', 'fixed_amount', 'gross', 'meal_amount', 'deduction', 'pit_tax', 'net'];

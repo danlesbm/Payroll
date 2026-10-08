@@ -585,6 +585,8 @@ async function admCfg(me, box, reload) {
 let ADM_PIT_YEAR = null;   // biểu đang chọn (giữ khi vẽ lại thẻ)
 function admPitCard(me, c, el) {
   const isAdm = me.isAdmin, wh0 = c.settings.pit_withhold === 'bonus' ? 'bonus' : 'none';
+  // Sửa biểu thuế: Admin hoặc "Quản lý hệ số" toàn hệ thống (người chỉ quản lý hệ số 1 bảng lương thì chỉ xem)
+  const canEd = isAdm || me.assignments.some(a => a.role === 'hr' && a.scope_type === 'all'), dis = canEd ? '' : ' disabled title="Chỉ Admin hoặc Quản lý hệ số toàn hệ thống mới sửa được biểu thuế"';
   // % bảo hiểm bắt buộc được trừ khi tính thuế (chỉ để vẽ ví dụ)
   const pctIns = c.dedTypes.filter(k => k.pit_deductible && k.active && k.calc === 'pct_insurance').reduce((s, k) => s + Number(k.value || 0), 0) || 10.5;
   const capIn = v => v === null || v === undefined ? '' : Number(v);
@@ -646,10 +648,11 @@ function admPitCard(me, c, el) {
             <td class="n">${last ? `<span class="muted" data-blast>Trên mức bậc trước${i && ed.brackets[i - 1].upto > 0 ? ` (trên ${money(ed.brackets[i - 1].upto)})` : ''}</span>` : `<input type="number" min="0" step="1000000" data-bu="${i}" value="${b.upto ?? ''}"><div class="muted small" data-bmv="${i}">${b.upto > 0 ? money(b.upto) + ' đ' : ''}</div>`}</td>
             <td class="n" data-bm="${i}">${moTxt(i)}</td><td class="n"><input type="number" class="rate" min="0" max="100" step="0.5" data-br="${i}" value="${Number.isFinite(b.rate) ? b.rate : ''}"></td>
             <td><button class="btn red sm" data-bx="${i}" ${ed.brackets.length < 2 ? 'disabled' : ''}>Xoá bậc</button></td></tr>`; }).join('')}</tbody></table>
-        <div class="row" style="margin-top:6px"><button class="btn sec sm" id="pe_add">+ Thêm bậc</button><span class="muted small">Bậc mới chèn trước bậc cuối (bậc không giới hạn). Xoá bậc cuối thì bậc liền trước thành bậc không giới hạn.</span></div>
-        <div class="row" style="margin:10px 0 0"><button class="btn" id="pe_save">Lưu biểu thuế</button>
-          ${ed.isNew ? '<button class="btn sec" id="pe_cancel">Huỷ biểu mới</button>' : `<button class="btn sec" id="pe_new">Tạo biểu cho năm mới</button><button class="btn sec" id="pe_reset" ${dirty ? '' : 'hidden'}>Bỏ thay đổi</button><span class="grow"></span><button class="btn red" id="pe_del">Xoá biểu này</button>`}</div></div>`
-      : `<div class="row" style="margin-top:8px"><button class="btn" id="pe_blank">Tạo biểu thuế</button></div>`}
+        <div class="row" style="margin-top:6px"><button class="btn sec sm" id="pe_add"${dis}>+ Thêm bậc</button><span class="muted small">Bậc mới chèn trước bậc cuối (bậc không giới hạn). Xoá bậc cuối thì bậc liền trước thành bậc không giới hạn.</span></div>
+        <div class="row" style="margin:10px 0 0"><button class="btn" id="pe_save"${dis}>Lưu biểu thuế</button>
+          ${ed.isNew ? '<button class="btn sec" id="pe_cancel">Huỷ biểu mới</button>' : `<button class="btn sec" id="pe_new"${dis}>Tạo biểu cho năm mới</button><button class="btn sec" id="pe_reset" ${dirty ? '' : 'hidden'}>Bỏ thay đổi</button><span class="grow"></span><button class="btn red" id="pe_del"${dis}>Xoá biểu này</button>`}</div>
+        ${canEd ? '' : '<div class="muted small">Bạn chỉ xem được biểu thuế: chỉ Admin hoặc người "Quản lý hệ số" toàn hệ thống mới sửa được.</div>'}</div>`
+      : `<div class="row" style="margin-top:8px"><button class="btn" id="pe_blank"${dis}>Tạo biểu thuế</button></div>`}
       <h3 style="margin:16px 0 6px">Trừ thuế tạm tính vào lương</h3>
       <label class="pitopt"><input type="radio" name="pit_wh" value="none" ${wh0 === 'none' ? 'checked' : ''} ${isAdm ? '' : 'disabled'}> <b>Chỉ ước tính, không trừ vào lương</b> — bảng lương hiện thuế TNCN tạm tính để tham khảo, thực nhận không đổi (mặc định).</label>
       <label class="pitopt"><input type="radio" name="pit_wh" value="bonus" ${wh0 === 'bonus' ? 'checked' : ''} ${isAdm ? '' : 'disabled'}> <b>Trừ thuế tạm tính vào thưởng thực nhận</b> — mỗi tháng tự thêm khoản trừ vào thưởng "Thuế TNCN (tạm tính)"; tháng 12 là "Thuế TNCN (quyết toán năm)", số âm được cộng trả lại vào thưởng.</label>
@@ -739,7 +742,7 @@ function admFundCard(c, o, el, addBtn) {
         <td class="small">${esc(f.note || '')}</td><td class="n">${f.sort_order}</td><td>${f.active ? '✓' : '—'}</td><td style="white-space:nowrap"><button class="btn sec sm" data-ef="${f.id}">Sửa</button> <button class="btn red sm" data-df="${f.id}">Xoá</button></td></tr>`).join('') || '<tr><td colspan="8" class="muted">Chưa có quỹ lương nào.</td></tr>'}</tbody></table>`;
     el.querySelectorAll('[data-ef]').forEach(b => b.onclick = guard(() => form(F.find(f => f.id === b.dataset.ef))));
     el.querySelectorAll('[data-df]').forEach(b => b.onclick = guard(async () => {
-      const f = F.find(x => x.id === b.dataset.df); if (!await confirmBox(`Xoá quỹ lương "${f.name}"? Người và bộ phận đang chọn quỹ này về "Tự xếp"; dòng lương đã tính có quỹ này sẽ được xếp lại theo cài đặt hiện tại khi tổng hợp. Nếu chỉ thôi dùng, nên đặt Trạng thái = Ngừng.`)) return;
+      const f = F.find(x => x.id === b.dataset.df); if (!await confirmBox(`Xoá quỹ lương "${f.name}"? Chỉ xoá được quỹ chưa có trong bảng lương nào đã tính; người và bộ phận đang chọn quỹ này về "Tự xếp". Quỹ đã có trong bảng lương thì không xoá được (để giữ đúng báo cáo các tháng cũ) — hãy sửa Trạng thái = Ngừng.`)) return;
       await DEL('/api/config/salary-funds/' + f.id); await refresh(true); toast('Đã xoá quỹ lương');
     }));
   }

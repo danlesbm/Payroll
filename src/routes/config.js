@@ -110,7 +110,7 @@ router.put('/pit-schedules/:year', api(async req => {
 }));
 router.delete('/pit-schedules/:year', api(async req => {
   needHr(req);
-  const year = Number(req.params.year);
+  const year = Number(req.params.year); if (!Number.isInteger(year) || year < 2000 || year > 2200) bad('Năm áp dụng không hợp lệ');
   if ((await one('SELECT count(*)::int AS n FROM pit_schedules')).n <= 1) bad('Phải giữ ít nhất 1 biểu thuế', 409);
   const r = await one('DELETE FROM pit_schedules WHERE year=$1 RETURNING *', [year]); if (!r) bad('Không tìm thấy biểu thuế', 404);
   await pitSvc.staleFromYear(pool, year); await audit(req, 'pit_schedule.delete', 'pit_schedules', String(year), r);

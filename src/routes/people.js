@@ -204,8 +204,10 @@ async function taxEmp(req, id) {
   if (!canTax(req, e)) forbid('Chỉ Admin, người Quản lý nhân sự hoặc người Quản lý hệ số của bảng lương này mới xem / sửa được thông tin thuế TNCN');
   return e;
 }
-const monthIn = (v, label, nullable) => { const x = str(v).slice(0, 7); if (!x && nullable) return null; if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(x)) bad(`${label} không hợp lệ (chọn tháng/năm)`); return x + '-01'; };
-const dateIn = v => { const x = str(v); if (!x) return null; if (!/^\d{4}-\d{2}-\d{2}$/.test(x)) bad('Ngày sinh không hợp lệ'); return x; };
+const monthIn = (v, label, nullable) => { const x = str(v).slice(0, 7); if (!x && nullable) return null; if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(x) || x < '2000-01' || x > '2200-12') bad(`${label} không hợp lệ (chọn tháng/năm)`); return x + '-01'; };
+// Ngày có thật (vd không nhận 31/02), năm 1900 – nay
+const realDate = x => /^\d{4}-\d{2}-\d{2}$/.test(x) && !isNaN(Date.parse(x + 'T00:00:00Z')) && new Date(x + 'T00:00:00Z').toISOString().slice(0, 10) === x;
+const dateIn = v => { const x = str(v); if (!x) return null; if (!realDate(x) || x < '1900-01-01' || x > new Date().toISOString().slice(0, 10)) bad('Ngày sinh không hợp lệ'); return x; };
 const DEP_COLS = `id, employee_id, full_name, relationship, birth_date, id_number, tax_code, to_char(from_month,'YYYY-MM') AS from_month, to_char(to_month,'YYYY-MM') AS to_month, note, updated_at,
   (from_month <= ${CUR_MONTH} AND (to_month IS NULL OR to_month >= ${CUR_MONTH})) AS active_now`;
 function depFields(b, partial) {
@@ -258,25 +260,27 @@ router.get('/employees/:id/tax-deductions', api(async req => {
   const e = await taxEmp(req, req.params.id);
   return { employee: e, items: await rows('SELECT year, health, education, other, note, updated_at FROM employee_tax_deductions WHERE employee_id=$1 ORDER BY year DESC', [e.id]) };
 }));
-async function saveTaxDeduction(req, e, year, b) {
-  const v = { health: moneyIn(b.health, 'Chi phí y tế'), education: moneyIn(b.education, 'Chi phí giáo dục'), other: moneyIn(b.other, 'Khoản giảm trừ khác'), note: str(b.note).slice(0, 500) || null };
-  if (!v.health && !v.education && !v.other && !v.note) await pool.query('DELETE FROM employee_tax_deductions WHERE employee_id=$1 AND year=$2', [e.id, year]);
-  else await pool.query(`INSERT INTO employee_tax_deductions(employee_id, year, health, education, other, note, updated_by, updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,now())
+const taxValues = b => ({ health: moneyIn(b.health, 'Chi phí y tế'), education: moneyIn(b.education, 'Chi phí giáo dục'), other: moneyIn(b.other, 'Khoản giảm trừ khác'), note: str(b.note).slice(0, 500) || null });
+/** Lưu giảm trừ năm của 1 người (v đã kiểm tra bằng taxValues); trả về số cũ để ghi nhật ký. */
+async function saveTaxDeduction(c, req, e, year, v) {
+  const old = (await c.query('SELECT health, education, other, note FROM employee_tax_deductions WHERE employee_id=$1 AND year=$2', [e.id, year])).rows[0] || null;
+  if (!v.health && !v.education && !v.other && !v.note) await c.query('DELETE FROM employee_tax_deductions WHERE employee_id=$1 AND year=$2', [e.id, year]);
+  else await c.query(`INSERT INTO employee_tax_deductions(employee_id, year, health, education, other, note, updated_by, updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,now())
     ON CONFLICT (employee_id, year) DO UPDATE SET health=EXCLUDED.health, education=EXCLUDED.education, other=EXCLUDED.other, note=EXCLUDED.note, updated_by=EXCLUDED.updated_by, updated_at=now()`, [e.id, year, v.health, v.education, v.other, v.note, req.auth.user.id]);
-  await pitSvc.staleEmployee(pool, e.id, year, year);
-  return v;
+  await pitSvc.staleEmployee(c, e.id, year, year);
+  return old && { health: Number(old.health), education: Number(old.education), other: Number(old.other), note: old.note };
 }
 router.put('/employees/:id/tax-deductions/:year', api(async req => {
-  const e = await taxEmp(req, req.params.id), year = yearIn(req.params.year);
-  const v = await saveTaxDeduction(req, e, year, req.body || {});
-  await audit(req, 'tax_deduction.save', 'employee', e.id, { year, ...v });
+  const e = await taxEmp(req, req.params.id), year = yearIn(req.params.year), v = taxValues(req.body || {});
+  const old = await tx(c => saveTaxDeduction(c, req, e, year, v));
+  await audit(req, 'tax_deduction.save', 'employee', e.id, { year, ...v, old });
   return { ok: true, year, ...v };
 }));
 // Bảng nhập nhanh giảm trừ theo năm cho cả bảng lương (người hưởng lương theo hệ số)
 router.get('/tax-deductions', api(async req => {
   const year = yearIn(req.query.year), groupId = req.query.groupId;
   if (groupId && !isUuid(groupId)) bad('Bảng lương không hợp lệ');
-  const all = req.auth.isAdmin || req.auth.can('people', {});
+  const all = req.auth.isAdmin || req.auth.can('people', {}) || req.auth.can('hr', {});
   if (!all && !(groupId && req.auth.can('hr', { groupId }))) forbid('Chọn bảng lương bạn được phân quyền "Quản lý hệ số"');
   const p = [year, `${year}-01-01`, `${year}-12-01`], w = [`v.sso_status='active'`, `v.pay_mode='coef'`, 'NOT v.excluded', 'v.department_id IS NOT NULL'];
   if (groupId) { p.push(groupId); w.push(`v.group_id=$${p.length}`); }
@@ -286,12 +290,16 @@ router.get('/tax-deductions', api(async req => {
     WHERE ${w.join(' AND ')} ORDER BY v.group_name NULLS LAST, v.pay_department_sort NULLS LAST, v.emp_order, v.sort_order, v.full_name`, p);
   return { year, employees: list };
 }));
+// Kiểm tra quyền và số liệu của mọi dòng trước, rồi lưu tất cả trong một giao dịch (lỗi một dòng thì không lưu dòng nào)
 router.post('/tax-deductions/bulk', api(async req => {
-  const year = yearIn(req.body?.year), list = Array.isArray(req.body?.rows) ? req.body.rows : bad('Không có dữ liệu');
-  let saved = 0;
-  for (const r of list) { const e = await taxEmp(req, r.employeeId); await saveTaxDeduction(req, e, year, r); saved++; }
-  await audit(req, 'tax_deduction.bulk', 'employee', null, { year, saved });
-  return { ok: true, saved };
+  const year = yearIn(req.body?.year), list = Array.isArray(req.body?.rows) && req.body.rows.length ? req.body.rows : bad('Không có dữ liệu');
+  if (list.length > 2000) bad('Quá nhiều dòng');
+  const items = [];
+  for (const r of list) { if (!r || typeof r !== 'object') bad('Dữ liệu không hợp lệ'); const e = await taxEmp(req, r.employeeId); items.push({ e, v: taxValues(r) }); }
+  if (new Set(items.map(x => x.e.id)).size !== items.length) bad('Một người xuất hiện hai lần');
+  const changes = await tx(async c => { const out = []; for (const { e, v } of items) out.push({ employeeId: e.id, name: e.full_name, old: await saveTaxDeduction(c, req, e, year, v), new: v }); return out; });
+  await audit(req, 'tax_deduction.bulk', 'employee', null, { year, saved: changes.length, changes });
+  return { ok: true, saved: changes.length };
 }));
 
 router.post('/sso/sync', api(async req => { req.auth.needAdmin(); const r = await syncDirectory(); await audit(req, 'sso.sync', 'sso', null, r); return { ok: true, ...r }; }));

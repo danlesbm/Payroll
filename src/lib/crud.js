@@ -27,7 +27,8 @@ function pickFields(fields, body, partial) {
   }
   return out;
 }
-const fkMessage = e => e.code === '22003' ? 'Giá trị số quá lớn, hãy kiểm tra lại.' : e.code === '23503' ? 'Không thể xoá/đổi vì còn dữ liệu đang dùng mục này. Hãy tắt "đang dùng" thay vì xoá.'
+const FK_GONE = 'Mục được chọn không còn tồn tại (có thể vừa bị xoá ở máy khác) — hãy tải lại trang rồi chọn lại.';
+const fkMessage = e => e.code === '22003' ? 'Giá trị số quá lớn, hãy kiểm tra lại.' : e.code === '23503' ? (/^insert or update/i.test(e.message || '') ? FK_GONE : 'Không thể xoá/đổi vì còn dữ liệu đang dùng mục này. Hãy tắt "đang dùng" thay vì xoá.')
   : e.code === '23505' ? 'Mã hoặc tên bị trùng với mục đã có.' : null;
 
 function crud(router, { path, table, pk = 'id', pkType = 'uuid', fields, guard, after }) {

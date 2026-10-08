@@ -81,12 +81,14 @@ async function changes(req, q) {
     const e = eMap.get(h.employee_id), a = sums(h.vals), b = prev ? sums(prev.vals) : null;
     const gA = G.gradeLabel(h.grade_scale, h.grade), gB = prev ? G.gradeLabel(prev.grade_scale, prev.grade) : '';
     const detail = [];
-    for (const t of types) { const x = num(h.vals?.[t.code]), y = prev ? num(prev.vals?.[t.code]) : 0; if (!prev ? x : x !== y) detail.push(`${t.name}: ${prev ? y : '—'} → ${x}`); }
+    const fv = (t, v) => t.kind === 'amount' || t.kind === 'ins_amount' ? Math.round(v).toLocaleString('vi-VN') : v;   // số tiền: có dấu chấm ngăn cách
+    for (const t of types) { const x = num(h.vals?.[t.code]), y = prev ? num(prev.vals?.[t.code]) : 0; if (!prev ? x : x !== y) detail.push(`${t.name}: ${prev ? fv(t, y) : '—'} → ${fv(t, x)}`); }
     const ch = { insurance: !!b && Math.abs(a.insurance - b.insurance) > 1e-9, bonus: !!b && Math.abs(a.bonus - b.bonus) > 1e-9, amount: !!b && Math.abs(a.amount - b.amount) > 1e-9, ins_amount: !!b && Math.abs(a.ins_amount - b.ins_amount) > 1e-9, grade: !!b && gA !== gB };
     const keep = prev ? (kind === 'all' ? (ch.insurance || ch.bonus || ch.amount || ch.ins_amount || ch.grade) : (ch[kind] || (kind === 'insurance' && ch.grade))) : withFirst;
     if (keep && h.ef >= from && h.ef <= to) out.push({ id: h.id, employee_id: h.employee_id, name: e.full_name, code: e.employee_code, dept: e.dept, group: e.group_name, ef: h.ef, first: !prev,
       ins_before: b ? b.insurance : null, ins_after: a.insurance, bonus_before: b ? b.bonus : null, bonus_after: a.bonus, amount_before: b ? b.amount : null, amount_after: a.amount, ins_amount_before: b ? b.ins_amount : null, ins_amount_after: a.ins_amount,
-      delta: b ? r4(a.insurance - b.insurance) : null, pct: b && b.insurance ? r4((a.insurance - b.insurance) / b.insurance * 100) : null, grade_before: gB, grade_after: gA, detail, note: h.note, by: h.by_name });
+      delta: b ? r4(a.insurance - b.insurance) : null, pct: b && b.insurance ? r4((a.insurance - b.insurance) / b.insurance * 100) : null,
+      amt_delta: b ? Math.round(a.ins_amount - b.ins_amount) : null, amt_pct: b && b.ins_amount ? r4((a.ins_amount - b.ins_amount) / b.ins_amount * 100) : null, grade_before: gB, grade_after: gA, detail, note: h.note, by: h.by_name });
     prev = h;
   }
   out.sort((x, y) => y.ef.localeCompare(x.ef) || x.name.localeCompare(y.name, 'vi'));

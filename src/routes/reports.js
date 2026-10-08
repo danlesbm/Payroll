@@ -33,7 +33,7 @@ const MON = Array.from({ length: 12 }, (_, i) => 'T' + (i + 1));
 
 const statusSql = locked => locked ? `r.status='locked'` : `r.status IN ('submitted','pending_dir','locked')`;
 async function allowedGroups(req) {
-  const gs = await rows('SELECT id, code, name, kind FROM groups WHERE active ORDER BY sort_order, name');
+  const gs = await rows('SELECT id, code, name, kind, pay_type FROM groups WHERE active ORDER BY sort_order, name');
   return gs.filter(g => req.auth.canAny(PAY_ROLES, { groupId: g.id }));
 }
 const selfViewOn = async () => (await one(`SELECT value FROM settings WHERE key='self_view'`))?.value === 'true';
@@ -223,11 +223,33 @@ router.get('/employee-month/export', async (req, res) => {
 // locked=1: chỉ tháng đã khoá; mặc định gồm cả bảng lương nháp để theo dõi trong năm.
 async function pitYear(req, query) {
   const year = Number(query.year); if (!yearOk(year)) bad('Năm không hợp lệ');
-  const groups = await allowedGroups(req); if (!groups.length) forbid('Bạn không được phân quyền xem bảng lương nào');
+  const groups = (await allowedGroups(req)).filter(g => g.kind && g.pay_type !== 'fixed'); if (!groups.length) forbid('Bạn không được phân quyền xem bảng lương theo hệ số nào');
   const gid = query.groupId && isUuid(query.groupId) ? query.groupId : null;
   if (gid && !groups.some(g => g.id === gid)) forbid('Bạn không được phân quyền xem bảng lương này');
   const r = await pitSvc.yearSummary(pool, { year, groupIds: gid ? [gid] : groups.map(g => g.id), lockedOnly: query.locked === '1' });
-  return { ...r, locked: query.locked === '1', groupId: gid, groups: groups.filter(g => g.kind).map(g => ({ id: g.id, name: g.name })) };
+  const seen = new Map(), see = g => { if (!seen.has(g)) seen.set(g, req.auth.canAny(PAY_ROLES, { groupId: g })); return seen.get(g); };
+  r.employees.forEach(e => pitRedact(req, e, see));
+  return { ...r, locked: query.locked === '1', groupId: gid, groups: groups.map(g => ({ id: g.id, name: g.name })) };
+}
+// Bỏ số liệu nội bộ (theo từng bảng lương, phạm vi phân quyền) trước khi trả ra ngoài
+function pitStrip(e) { if (!e) return e; delete e.scope; for (const m of Object.values(e.months)) { delete m.byGroup; delete m.groupIds; } return e; }
+// Thuế tính trên MỌI dòng lương của người trong năm, nhưng người xem chỉ thấy số của các bảng lương mình được phân quyền:
+// tháng chỉ có lương ở bảng lương khác → ẩn; tháng có cả hai → chỉ phần của bảng được xem; không hiện quyết toán cả năm (vì gồm thu nhập ở bảng khác).
+// Tên người phụ thuộc, ghi chú giảm trừ: chỉ Admin, Quản lý nhân sự, Quản lý hệ số của bảng lương có người đó (như màn hình người phụ thuộc).
+function pitRedact(req, e, see) {
+  e.personal = !!(req.auth.isAdmin || req.auth.can('people', {}) || req.auth.can('hr', { groupId: e.scope?.groupId, sheetId: e.scope?.sheetId }));
+  if (!e.personal) { e.dependents = e.dependents.map(d => ({ from: d.from, to: d.to })); e.extras = { ...e.extras, note: '' }; }
+  let restricted = false;
+  for (const [k, m] of Object.entries(e.months)) {
+    const gs = Object.keys(m.byGroup || {}), vis = gs.filter(see);
+    if (vis.length === gs.length) continue;
+    restricted = true;
+    if (!vis.length) { e.months[k] = { hidden: true, taxable: null, insurance: null, exempt: null, net: null, dependents: null, tax: null, source: null, groups: [], locked: m.locked }; continue; }
+    const b = vis.map(g => m.byGroup[g]), sum = f => b.reduce((s, x) => s + x[f], 0);
+    e.months[k] = { ...m, taxable: sum('taxable'), insurance: sum('insurance'), exempt: sum('exempt'), net: sum('net'), tax: b.every(x => x.stored) ? sum('tax') : null, source: b.every(x => x.stored) ? 'stored' : null, groups: b.map(x => x.name), partial: true };
+  }
+  if (restricted) Object.assign(e, { restricted: true, annual: null, remaining: null, staleDecember: false, taxInMonths: Object.values(e.months).reduce((s, m) => s + num(m.tax), 0) });
+  return pitStrip(e);
 }
 router.get('/pit-year', api(async req => pitYear(req, req.query)));
 // ===== 6. Tổng hợp tiền lương theo quỹ lương (HĐQT, Ban kiểm soát, văn phòng, công nhân vận hành, quản lý & hành chính, sửa chữa…) =====
@@ -247,7 +269,8 @@ const depMonthsIn = (d, year) => d.from ? Math.max(0, Math.min(year * 12 + 11, d
 const vnd = n => Math.round(num(n)).toLocaleString('vi-VN');
 const PIT_NOTE = 'Thu nhập chịu thuế = lương BH (gồm phụ cấp an toàn) + phụ cấp + thưởng; KHÔNG gồm tiền làm đêm, làm thêm, làm lễ tết và toàn bộ tiền ăn ca. Tháng 1–11: thuế tạm tính (mức trần từng bậc cả năm ÷ 12; giảm trừ bản thân, người phụ thuộc theo tháng; y tế, giáo dục, khác = số cả năm ÷ 12). Tháng 12: quyết toán = thuế cả năm − thuế đã tạm tính tháng 1–11 (âm = được hoàn).';
 const schTxt = s => s ? `Biểu thuế áp dụng: năm ${s.year} — giảm trừ bản thân ${vnd(s.selfDeduction)} đ/tháng, người phụ thuộc ${vnd(s.dependentDeduction)} đ/người/tháng; chi phí y tế tối đa ${s.healthCap === null ? 'không giới hạn' : vnd(s.healthCap) + ' đ'}, giáo dục tối đa ${s.educationCap === null ? 'không giới hạn' : vnd(s.educationCap) + ' đ'} / năm.` : 'Chưa có biểu thuế TNCN (Cấu hình › Thuế TNCN): chưa tính được thuế.';
-const monthNote = m => [m.source === 'estimate' ? 'ước tính (tháng tính lương trước khi có thuế TNCN)' : '', m.tax === null ? 'chưa tính thuế' : '', m.locked ? '' : 'bảng lương chưa khoá', (m.groups || []).length > 1 ? 'nhiều bảng lương: ' + m.groups.join(', ') : ''].filter(Boolean).join('; ');
+const monthNote = m => [m.source === 'estimate' ? 'ước tính (tháng tính lương trước khi có thuế TNCN)' : '', m.notWithheld ? 'chưa trừ vào lương / thưởng — thu ở quyết toán tháng 12' : '', m.tax === null ? 'chưa tính thuế' : '', m.locked ? '' : 'bảng lương chưa khoá', m.partial ? 'chỉ phần ở bảng lương được xem: ' + m.groups.join(', ') : (m.groups || []).length > 1 ? 'nhiều bảng lương: ' + m.groups.join(', ') : ''].filter(Boolean).join('; ');
+const RESTRICT_TXT = 'Người này có lương ở bảng lương bạn không được phân quyền xem: chỉ hiện số của bảng lương được xem, không hiện quyết toán cả năm (quyết toán gồm thu nhập ở mọi bảng lương).';
 // Ghi bảng kê thuế cả năm của 1 người (tháng → quyết toán) từ dòng r; trả về dòng tiếp theo. Cột: 1 nhãn, 2–6 số, 7 ghi chú.
 function pitBlock(ws, r, e, sch, year, title) {
   const M = ST.M, B = { ...ST.M, b: true }, L = ST.C, LB = { ...ST.C, b: true }, NOTE = { ...ST.C, i: true, color: '6B7280', wrap: true };
@@ -256,13 +279,14 @@ function pitBlock(ws, r, e, sch, year, title) {
   const t = { taxable: 0, exempt: 0, insurance: 0, tax: 0 };
   for (let k = 1; k <= 12; k++) {
     const m = e.months[k]; if (!m) continue;
-    ws.set(r, 1, k === 12 ? 'Tháng 12 (quyết toán năm)' : `Tháng ${k} (tạm tính)`, L); ws.set(r, 2, num(m.taxable), M); ws.set(r, 3, num(m.exempt), M); ws.set(r, 4, num(m.insurance), M); ws.set(r, 5, num(m.dependents), ST.D);
+    ws.set(r, 1, k === 12 ? 'Tháng 12 (quyết toán năm)' : `Tháng ${k} (tạm tính)`, L);
+    if (m.hidden) { for (let c = 2; c <= 6; c++) ws.set(r, c, null, M); ws.set(r, 7, 'lương ở bảng lương bạn không được phân quyền xem', NOTE); r++; continue; } ws.set(r, 2, num(m.taxable), M); ws.set(r, 3, num(m.exempt), M); ws.set(r, 4, num(m.insurance), M); ws.set(r, 5, num(m.dependents), ST.D);
     ws.set(r, 6, m.tax === null ? null : num(m.tax), k === 12 ? B : M); ws.set(r, 7, monthNote(m), NOTE); r++;
     t.taxable += num(m.taxable); t.exempt += num(m.exempt); t.insurance += num(m.insurance); t.tax += num(m.tax);
   }
   ws.set(r, 1, 'Cả năm', ST.T); ws.set(r, 2, t.taxable, ST.T); ws.set(r, 3, t.exempt, ST.T); ws.set(r, 4, t.insurance, ST.T); ws.set(r, 5, null, ST.T); ws.set(r, 6, t.tax, ST.T); ws.set(r, 7, 'tổng thuế các tháng', { ...ST.T, i: true }); r += 2;
   const a = e.annual;
-  if (!a) { ws.set(r++, 1, schTxt(null), { i: true, color: 'B91C1C' }); return r + 1; }
+  if (!a) { ws.set(r++, 1, e.restricted ? RESTRICT_TXT : schTxt(null), { i: true, color: e.restricted ? '92400E' : 'B91C1C' }); return r + 1; }
   ws.box(r, 1, r, 7, `Quyết toán thuế TNCN năm ${year}`, { ...ST.H, al: 'left' }); r++;
   const step = (label, v, note, bold) => { ws.set(r, 1, label, bold ? LB : L); ws.set(r, 2, v, bold ? B : M); ws.box(r, 3, r, 7, note || '', NOTE); r++; };
   const capTxt = (got, cap) => `đã kê ${vnd(got)} đ${cap === null || cap === undefined ? '' : `, tối đa ${vnd(cap)} đ/năm`}`;
@@ -279,12 +303,12 @@ function pitBlock(ws, r, e, sch, year, title) {
     for (const p of a.parts) { ws.set(r, 1, `Bậc ${p.level}`, L); ws.set(r, 2, p.from, M); ws.set(r, 3, p.to === null ? 'trở lên' : p.to, p.to === null ? { ...L, al: 'right' } : M); ws.set(r, 4, `${p.rate}%`, { ...L, al: 'right' }); ws.set(r, 5, p.base, M); ws.set(r, 6, p.tax, M); r++; }
   }
   step('Thuế TNCN cả năm', a.tax, a.parts.length ? 'cộng thuế các bậc' : 'thu nhập tính thuế bằng 0 nên không có thuế', true);
-  step('(−) Đã tạm tính tháng 1–11', -a.priorTax, '');
+  step(a.priorBasis === 'withheld' ? '(−) Đã khấu trừ tháng 1–11' : '(−) Đã tạm tính tháng 1–11', -a.priorTax, a.priorBasis === 'withheld' ? 'chỉ cộng các tháng đã trừ thuế vào thưởng / lương' : '');
   step('= Tháng 12 quyết toán', a.settle, a.settle > 0 ? 'phải nộp thêm' : a.settle < 0 ? 'được hoàn (trả lại) cho người lao động' : 'không phải nộp thêm', true);
   if (e.settled) step('Số đã tính ở bảng lương tháng 12', e.months[12]?.tax ?? null, e.staleDecember ? 'khác số tính lại hiện nay (đổi người phụ thuộc, giảm trừ hoặc lương tháng 1–11 sau khi tính tháng 12) — tháng 12 cần tính lại' : (e.months[12]?.source === 'estimate' ? 'ước tính' : ''));
   else { const n = Object.keys(e.months).length; ws.box(r, 1, r, 7, `Chưa có bảng lương tháng 12: quyết toán ở trên là dự kiến, theo ${n} tháng đã có.${n < 12 ? ` Số dự kiến coi như năm chỉ có ${n} tháng: mức trần bậc thuế, giảm trừ y tế / giáo dục / khác quy về ${n}/12 năm, giảm trừ bản thân ${n} tháng — thu nhập đều thì gần bằng tổng thuế đã tạm tính. Số chính thức tính ở bảng lương tháng 12 (bản thân đủ 12 tháng).` : ''}`, NOTE); ws.height(r, 30); r++; }
   step('Còn phải nộp (+) / được hoàn (−)', e.remaining, 'thuế cả năm − tổng thuế các tháng ở trên', true);
-  ws.box(r, 1, r, 7, 'Người phụ thuộc: ' + (e.dependents.length ? e.dependents.map(d => `${d.name} (từ ${ymTxt(d.from)}${d.to ? ' đến ' + ymTxt(d.to) : ', đang tính'}; ${depMonthsIn(d, year)} tháng trong năm)`).join('; ') : 'không có'), { ...ST.C, wrap: true }); ws.height(r, 30); r++;
+  ws.box(r, 1, r, 7, 'Người phụ thuộc: ' + (e.dependents.length ? (e.personal === false ? `${e.dependents.length} người (họ tên chỉ Admin, Quản lý nhân sự, Quản lý hệ số xem được): ` : '') + e.dependents.map(d => `${d.name ? d.name + ' ' : ''}(từ ${ymTxt(d.from)}${d.to ? ' đến ' + ymTxt(d.to) : ', đang tính'}; ${depMonthsIn(d, year)} tháng trong năm)`).join('; ') : 'không có'), { ...ST.C, wrap: true }); ws.height(r, 30); r++;
   return r + 1;
 }
 // Tổng hợp + chi tiết thuế TNCN cả năm của các bảng lương được xem
@@ -303,7 +327,7 @@ router.get('/pit-year/export', async (req, res) => {
     const v = [...MON.map((_, i) => e.months[i + 1] ? e.months[i + 1].tax : null), a?.taxable ?? null, a?.totalDeduction ?? null, a?.assessable ?? null, a?.tax ?? null, a?.priorTax ?? null, e.settled ? e.months[12].tax : null, e.remaining];
     ws.set(r, 1, k + 1, ST.C); ws.set(r, 2, e.name, ST.C); ws.set(r, 3, e.code || '', ST.C); ws.set(r, 4, e.department || '', ST.C); ws.set(r, 5, e.group || '', ST.C);
     v.forEach((x, i) => { ws.set(r, 6 + i, x === null || x === undefined ? null : num(x), i === 15 || i === 18 ? { ...ST.M, b: true } : ST.M); tot[5 + i] += num(x); });
-    ws.set(r, 25, [e.staleDecember ? 'Tháng 12 cần tính lại' : '', !e.settled && a ? 'chưa có tháng 12: cột "Còn phải nộp" là quyết toán dự kiến' : '', est.length ? 'ước tính: ' + est.join(', ') : '', e.dependents.length ? `${e.dependents.length} người phụ thuộc` : ''].filter(Boolean).join('; '), { ...ST.C, wrap: true });
+    ws.set(r, 25, [e.restricted ? 'có lương ở bảng lương bạn không được xem: chỉ hiện thuế của bảng lương được xem, không có quyết toán' : '', e.staleDecember ? 'Tháng 12 cần tính lại' : '', !e.settled && a ? 'chưa có tháng 12: cột "Còn phải nộp" là quyết toán dự kiến' : '', est.length ? 'ước tính: ' + est.join(', ') : '', e.dependents.length ? `${e.dependents.length} người phụ thuộc` : ''].filter(Boolean).join('; '), { ...ST.C, wrap: true });
   });
   const tr = 5 + list.length; for (let c = 1; c <= 25; c++) ws.set(tr, c, c === 2 ? 'Cộng' : c >= 6 && c <= 24 ? tot[c - 1] : null, ST.T);
   ws.set(tr + 2, 1, PIT_NOTE, { i: true }); ws.set(tr + 3, 1, 'Còn phải nộp / được hoàn = thuế cả năm − tổng thuế các tháng: bằng 0 khi tháng 12 đã quyết toán đúng; chưa có tháng 12 thì là số quyết toán dự kiến.', { i: true });
@@ -417,7 +441,7 @@ router.get('/my/export/file', async (req, res) => {
 // Bảng kê thuế TNCN cả năm của chính mình (chỉ tháng đã khoá) — khai trước /my/:year/:month để không bị nhầm đường dẫn
 router.get('/my/pit/export', async (req, res) => {
   const emp = await mine(req), year = Number(req.query.year); if (!yearOk(year)) bad('Năm không hợp lệ');
-  const r = await pitSvc.yearSummary(pool, { year, employeeIds: [emp.id], lockedOnly: true }), e = r.employees[0];
+  const r = await pitSvc.yearSummary(pool, { year, employeeIds: [emp.id], lockedOnly: true }), e = pitStrip(r.employees[0]);
   if (!e) bad('Năm này chưa có tháng nào đã khoá được tính thuế TNCN', 404);
   const wb = new Workbook(), ws = wb.sheet(`Thuế TNCN ${year}`);
   ws.col(1, 34); for (let c = 2; c <= 6; c++) ws.col(c, 16); ws.col(7, 36);
@@ -440,7 +464,7 @@ router.get('/my/:year/:month', api(async req => {
 router.get('/my/pit', api(async req => {
   const emp = await mine(req), year = Number(req.query.year); if (!yearOk(year)) bad('Năm không hợp lệ');
   const r = await pitSvc.yearSummary(pool, { year, employeeIds: [emp.id], lockedOnly: true });
-  return { year, schedule: r.schedule, me: r.employees[0] || null, note: 'Chỉ tính các tháng bảng lương đã được Giám đốc khoá. Tháng 1–11 là thuế tạm tính, tháng 12 là quyết toán cả năm.' };
+  return { year, schedule: r.schedule, me: pitStrip(r.employees[0]) || null, note: 'Chỉ tính các tháng bảng lương đã được Giám đốc khoá. Tháng 1–11 là thuế tạm tính, tháng 12 là quyết toán cả năm.' };
 }));
 // Cho giao diện biết có hiện tab "Lương của tôi" không
 async function selfTab(req) { return (await selfViewOn()) && !!(await myEmployee(req)); }

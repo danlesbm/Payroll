@@ -64,6 +64,8 @@ app.use('/api/workdays', require('./routes/workdays'));
 app.use('/api', (req, res) => res.status(404).json({ error: `Không có API ${req.method} ${req.path}` }));
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
+  // Chọn mục vừa bị xoá ở máy khác (vd quỹ lương): báo rõ thay vì "Lỗi hệ thống"
+  if (!err.status && err.code === '23503' && /^insert or update/i.test(err.message || '')) { err.status = 409; err.message = 'Mục được chọn không còn tồn tại (có thể vừa bị xoá ở máy khác) — hãy tải lại trang rồi chọn lại.'; }
   const status = err.status || (err.code === '23505' ? 409 : 500);
   if (status >= 500) console.error('[Payroll]', req.method, req.originalUrl, err);
   res.status(status).json({ error: status >= 500 ? `Lỗi hệ thống: ${err.message}` : err.message });
