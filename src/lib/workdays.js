@@ -3,6 +3,7 @@ const pad = n => String(n).padStart(2, '0');
 const dim = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const r2 = n => Math.round(n * 100) / 100;
+const { PREMIUM_METHOD } = require('./premium-method');
 const EPS = 1e-9;
 
 // Ngày nghỉ hằng tuần (0 = Chủ nhật … 6 = Thứ bảy)
@@ -71,11 +72,12 @@ function shiftGroupMin(rows) {
 /** Số "ngày tương đương" làm đêm / làm thêm / làm lễ của một người trong tháng.
  *  Mỗi ngày công: c = %ký hiệu ÷ 100 (theo nhóm phụ cấp, mặc định 1), h = %ngày lễ ÷ 100 (mặc định 1).
  *  Phụ cấp của ký hiệu (vd làm đêm 30%) = cơ sở × (c − 1); cơ sở = công đêm (nhóm 'night') hoặc toàn bộ công ('extra').
- *  Phần lễ = công × (h − 1) (+ phụ cấp sửa chữa × (h − 1)). Vd K1,3 ngày lễ 300%: làm đêm 0,3, làm lễ 2 × 2 = 4.
- *  Làm đêm KHÔNG nhân % lễ / tăng ca ở đây: calcLine tính tiền làm lễ / tăng ca trên đơn giá ngày đã gồm tiền làm đêm
- *  bình quân của tháng = (lương + thưởng + phụ cấp + tiền làm đêm) ÷ công chuẩn, như bảng Excel nhà máy. */
+ *  Phần lễ = công × (h − 1) (+ phụ cấp sửa chữa × (h − 1)).
+ *  Phụ cấp đêm × % lễ / % tăng ca: tuỳ phương án (src/lib/premium-method.js; o.method ghi đè khi kiểm thử):
+ *    B (Excel): KHÔNG cộng ở đây — calcLine tính tiền lễ / tăng ca trên đơn giá đã gồm tiền đêm bình quân. K1,3 ngày lễ 300%: đêm 0,3, lễ 4.
+ *    A (Thông tư): cộng phụ cấp đêm × (h − 1) vào lễ và × (otMult − 1) vào làm thêm. K1,3 ngày lễ 300%: đêm 0,3, lễ 2 + 2,6 = 4,6. */
 function premiumDays(entries, o) {
-  const out = { night: 0, extra: 0, holiday: 0 };
+  const out = { night: 0, extra: 0, holiday: 0 }, methodA = (o.method || PREMIUM_METHOD) === 'A';
   const std = num(o.std), otM = num(o.otMult); let cum = 0;
   const list = [...(entries || [])].sort((a, b) => num(a.day) - num(b.day));
   for (const e of list) {
@@ -85,8 +87,13 @@ function premiumDays(entries, o) {
     // Ký hiệu làm thêm (LT1–LT4…): trả nguyên % của ký hiệu (đã gồm đêm/lễ), không nhân thêm % ngày lễ
     if (o.ot && o.ot(e.code)) { out.extra += val * c; continue; }
     const over = std > 0 ? Math.max(0, Math.min(val, cum + val - std)) / val : 0; cum += val;   // phần công của ngày này vượt công tiêu chuẩn
-    if (kind === 'night') out.night += (num(w.night) > 0 ? num(w.night) : val) * (c - 1);
-    else if (kind) {   // phụ cấp kiểu sửa chữa…: phần phụ cấp cũng nhân % lễ / tăng ca
+    if (kind === 'night') {
+      const add = (num(w.night) > 0 ? num(w.night) : val) * (c - 1); out.night += add;
+      if (methodA) {   // phương án A: phụ cấp đêm cũng nhân % lễ / % tăng ca (ca đêm lễ 300% = 390%, ca đêm tăng ca ×2 = 260%)
+        if (h !== 1) out.holiday += add * (h - 1);
+        if (over > 0 && otM > 1) out.extra += add * (otM - 1) * over;
+      }
+    } else if (kind) {   // phụ cấp kiểu sửa chữa…: phần phụ cấp cũng nhân % lễ / tăng ca
       const add = val * (c - 1); out.extra += add;
       if (h !== 1) out.holiday += add * (h - 1);
       if (over > 0 && otM > 1) out.extra += add * (otM - 1) * over;

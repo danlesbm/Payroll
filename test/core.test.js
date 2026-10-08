@@ -321,7 +321,7 @@ test('làm đêm / sửa chữa / lễ: tổng ngày = lễ% × (công + công c
   const W = require('../src/lib/workdays');
   const work = { K1: { value: 1, night: 0 }, DEM: { value: 1, night: 1 }, SC: { value: 1, night: 0 }, 'K1,3': { value: 2, night: 1 } };
   const kind = { DEM: 'night', SC: 'extra', 'K1,3': 'night' }, pctTab = { DEM: 130, SC: 135, 'K1,3': 130 };
-  const o = { work, kind, pct: c => pctTab[c] ?? 100, holPct: d => (d === 1 ? 400 : 100) };
+  const o = { work, kind, pct: c => pctTab[c] ?? 100, holPct: d => (d === 1 ? 400 : 100), method: 'B' };   // ghi rõ phương án để test chạy đúng ở cả 2 nhánh
   assert.deepEqual(W.premiumDays([{ day: 5, code: 'K1' }], o), { night: 0, extra: 0, holiday: 0 });
   assert.deepEqual(W.premiumDays([{ day: 5, code: 'DEM' }], o), { night: 0.3, extra: 0, holiday: 0 });
   // ngày lễ 400% ca đêm: làm đêm 0,3 (không nhân lễ), lễ 3 công; phần đêm được tính vào đơn giá lễ ở calcLine
@@ -340,7 +340,7 @@ test('làm đêm / sửa chữa / lễ: tổng ngày = lễ% × (công + công c
   assert.deepEqual(W.premiumDays([{ day: 1, code: 'DEM' }], { ...o, skip: () => true }), { night: 0, extra: 0, holiday: 0 });
 });
 test('calcLine: làm đêm/thêm/lễ tách riêng; mặc định chuyển cả phần theo hệ số lương sang bảng thưởng', () => {
-  const base = { standardDays: 24, baseWage: 2000, coefTypes: [{ code: 'a', kind: 'insurance' }, { code: 'b', kind: 'bonus' }], coefs: { a: 2, b: 1 }, unitPrice: 1000, workDays: 24, minDays: 24 };
+  const base = { standardDays: 24, baseWage: 2000, coefTypes: [{ code: 'a', kind: 'insurance' }, { code: 'b', kind: 'bonus' }], coefs: { a: 2, b: 1 }, unitPrice: 1000, workDays: 24, minDays: 24, premiumMethod: 'B' };
   const dayS = 4000 / 24, dayB = 1000 / 24, pd = { night: 1.5, extra: 0.35, holiday: 3 };
   // cách cũ: phần theo hệ số lương nằm ở bảng lương
   const r = c.calcLine({ ...base, premiumDays: pd, premiumInBonus: false });
@@ -393,7 +393,7 @@ test('Excel: số nguyên không có dấu chấm thừa; ăn ca theo kiểu b�
 });
 
 test('làm đêm / làm thêm / lễ phần lương tính trên (lương BH + phụ cấp)', () => {
-  const r = c.calcLine({ workDays: 26, standardDays: 26, baseWage: 1000000, unitPrice: 0, premiumInBonus: false,
+  const r = c.calcLine({ workDays: 26, standardDays: 26, baseWage: 1000000, unitPrice: 0, premiumInBonus: false, premiumMethod: 'B',
     coefTypes: [{ code: 'bh', kind: 'insurance' }, { code: 'an_toan', kind: 'amount' }], coefs: { bh: 3, an_toan: 200000 }, safetyCode: 'an_toan',
     premiumDays: { night: 0.3, extra: 1, holiday: 2 } });
   const day = 3200000 / 26;
@@ -403,10 +403,42 @@ test('làm đêm / làm thêm / lễ phần lương tính trên (lương BH + ph
 });
 
 test('khớp bảng Excel NMTĐ Suối Sập 3 tháng 9/2026 (Hồ Đăng Thành): làm thêm = (lương + thưởng + phụ cấp + tiền đêm) × công × 2 ÷ 22', () => {
-  const r = c.calcLine({ workDays: 24, standardDays: 24, minDays: 22, rateBasis: 'min', baseWage: 2000000, unitPrice: 2000000, planFactor: 1.02,
+  const r = c.calcLine({ workDays: 24, standardDays: 24, minDays: 22, rateBasis: 'min', baseWage: 2000000, unitPrice: 2000000, planFactor: 1.02, premiumMethod: 'B',
     coefTypes: [{ code: 'bh', kind: 'insurance' }, { code: 'th', kind: 'bonus' }, { code: 'an_toan', kind: 'amount' }], coefs: { bh: 4.117, th: 3.461, an_toan: 250000 }, safetyCode: 'an_toan',
     premiumDays: { night: 2.4, extra: 0, holiday: 4 } });
   const S = 8234000 + 7060440 + 250000, T = 8 * S * 0.3 / 22;
   assert.equal(r.nightSalary + r.nightBonus, Math.round(T));                       // Excel 1.695.757
   assert.ok(Math.abs(r.holidaySalary + r.holidayBonus - (S + T) * 2 * 2 / 22) <= 2); // Excel 3.134.581
+});
+
+test('phương án A (Thông tư, nhánh theo-tt): phụ cấp đêm nhân % lễ / % tăng ca theo từng ca', () => {
+  const W = require('../src/lib/workdays');
+  const work = { K1: { value: 1, night: 0 }, DEM: { value: 1, night: 1 }, SC: { value: 1, night: 0 }, 'K1,3': { value: 2, night: 1 } };
+  const kind = { DEM: 'night', SC: 'extra', 'K1,3': 'night' }, pctTab = { DEM: 130, SC: 135, 'K1,3': 130 };
+  const o = { work, kind, pct: c => pctTab[c] ?? 100, holPct: d => (d === 1 ? 400 : 100), method: 'A' };
+  // ca đêm ngày lễ 400%: 520% = 1 (lương) + 0,3 (đêm) + 3,9 (lễ)
+  assert.deepEqual(W.premiumDays([{ day: 1, code: 'DEM' }], o), { night: 0.3, extra: 0, holiday: 3.9 });
+  // K1,3 ngày lễ 300%: lễ 2 (ca ngày) + 2,6 (ca đêm 390% − 100% − 30%) = 4,6
+  assert.deepEqual(W.premiumDays([{ day: 1, code: 'K1,3' }], { ...o, holPct: d => (d === 1 ? 300 : 100) }), { night: 0.3, extra: 0, holiday: 4.6 });
+  // K1,3 vượt công chuẩn, tăng ca ×2: ca đêm 260% = 200% (tiền tăng ca) + 30% đêm + 30% làm thêm
+  assert.deepEqual(W.premiumDays([{ day: 2, code: 'K1' }, { day: 3, code: 'K1,3' }], { ...o, std: 1, otMult: 2 }), { night: 0.3, extra: 0.3, holiday: 0 });
+  // sửa chữa: như phương án B
+  assert.deepEqual(W.premiumDays([{ day: 1, code: 'SC' }], o), { night: 0, extra: 0.35, holiday: 4.05 });
+  // calcLine A: tiền lễ / tăng ca KHÔNG nhân hệ số tiền đêm bình quân
+  const base = { standardDays: 24, baseWage: 2000, coefTypes: [{ code: 'a', kind: 'insurance' }, { code: 'b', kind: 'bonus' }], coefs: { a: 2, b: 1 }, unitPrice: 1000, workDays: 26, minDays: 24, premiumInBonus: false, premiumDays: { night: 1.5, extra: 0, holiday: 3 } };
+  const a = c.calcLine({ ...base, premiumMethod: 'A' }), b = c.calcLine({ ...base, premiumMethod: 'B' });
+  assert.equal(a.premiumMethod, 'A'); assert.equal(b.premiumMethod, 'B');
+  assert.equal(a.holidaySalary, Math.round(4000 / 24 * 3)); assert.equal(a.otSalaryAmt, Math.round(4000 * 2 / 24));
+  assert.equal(b.holidaySalary, Math.round(4000 / 24 * (1 + 1.5 / 24) * 3)); assert.equal(b.otSalaryAmt, Math.round(4000 * 2 / 24 * (1 + 1.5 / 24)));
+  assert.equal(a.nightSalary, b.nightSalary);   // tiền làm đêm 30% như nhau
+  // Hồ Đăng Thành 9/2026 theo A: lễ = 4,6 ngày × đơn giá ngày (lương + thưởng + phụ cấp) ÷ 22 = 3.250.201
+  const t = c.calcLine({ workDays: 24, standardDays: 24, minDays: 22, rateBasis: 'min', baseWage: 2000000, unitPrice: 2000000, planFactor: 1.02, premiumMethod: 'A',
+    coefTypes: [{ code: 'bh', kind: 'insurance' }, { code: 'th', kind: 'bonus' }, { code: 'an_toan', kind: 'amount' }], coefs: { bh: 4.117, th: 3.461, an_toan: 250000 }, safetyCode: 'an_toan',
+    premiumDays: { night: 2.4, extra: 0, holiday: 4.6 } });
+  assert.ok(Math.abs(t.holidaySalary + t.holidayBonus - 3250201) <= 2);
+});
+
+test('phương án đang dùng của nhánh này hợp lệ (A hoặc B)', () => {
+  const { PREMIUM_METHOD } = require('../src/lib/premium-method');
+  assert.ok(PREMIUM_METHOD === 'A' || PREMIUM_METHOD === 'B');
 });
