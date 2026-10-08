@@ -134,3 +134,25 @@ td.chgtd{background:#fef3c7}
 .paytb td.ps{font-size:11.5px;white-space:nowrap}
 .paytb td.n{padding:4px 3px}
 .paytb td.dp{font-size:11.5px;min-width:90px}
+
+/* Thống kê năm: thuế TNCN theo năm, nhập giảm trừ, quỹ lương; Lương của tôi: bảng kê thuế TNCN */
+.pittb th,.pittb td{padding:5px 6px}
+.pittb thead th{white-space:normal;line-height:1.2;vertical-align:bottom}.pittb thead th.a{min-width:92px}
+.pittb th.nm,.pittb td.nm{position:sticky;left:-1px;z-index:1;background:#fff;min-width:150px}
+.pittb th.nm{z-index:3;background:#f0f3fa}
+.pittb th.a{background:#e8eef9}.pittb td.a{background:#f8fafc}
+.pittb td.unl{font-style:italic;color:var(--mu)}
+.pittb tr.clk{cursor:pointer}.pittb tr.clk:hover td{background:#eef4ff}
+.pittb tr.tot td,.fundtb tr.tot td{font-weight:700;background:#f3f4f6}
+.pittb sup{color:#b45309;font-weight:700}
+.pitsteps{width:auto;min-width:min(620px,100%)}
+.pitsteps td{border:0;border-bottom:1px solid var(--line);padding:5px 10px}
+.pitsteps td.n{min-width:130px}
+.pitsteps tr.sum td{border-top:2px solid #94a3b8;border-bottom:2px solid #94a3b8;background:#f8fbff}
+.tdtb td{vertical-align:middle}.tdtb input.mny{width:130px;text-align:right;padding:4px 6px}
+.tdtb tr.chg td{background:#fffbeb}
+.tdtb input.over{border-color:#f59e0b;background:#fff7ed}
+.fundtb{table-layout:fixed;min-width:1180px}.fundtb th:first-child{width:250px}.fundtb th:nth-child(2){width:70px}
+.fundtb thead th{white-space:normal;line-height:1.2;vertical-align:bottom}.fundtb td:first-child{white-space:normal}
+.fundtb th.em,.fundtb td.em{background:#f8fbff}
+.fundlist{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:6px}
