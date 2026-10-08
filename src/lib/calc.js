@@ -152,4 +152,11 @@ function calcLine(i) {
   return { ratio: Math.round(ratio * 10000) / 10000, ratioBonus: Math.round(ratioBonus * 10000) / 10000, payStatus: pr.status, otDays: pr.otDays, rateDiv: div, minDays: minD, standardDays: std, dailySalary, dailyBonus, nightSalary: outS.night, nightBonus: outB.night, extraSalary: outS.extra, extraBonus: outB.extra, holidaySalary: outS.holiday, holidayBonus: outB.holiday, premiumInBonus: toBonus, premiumMethod, premSal, premBon, otSalaryAmt, otBonusAmt, salaryPremium, bonusPremium, premiumDays: { night: num(pd.night), extra: num(pd.extra), holiday: num(pd.holiday) }, laborFactor: lf, planFactor: pf, insuranceFull, insuranceBase, premBaseSalary: round(premBaseS), safetyFactor: sf, safetyAllowance, safetyBase, insCoef, bonusCoef, insuranceSalary, bonusBase, bonus, allowance, meal,
     periodicDeduction: periodic, monthlyDeduction, monthlyBonus, bonusDeduction, salaryNet, bonusNet, deduction, net, deductionDetail, extraDetail };
 }
-module.exports = { bonusCoefOf, pickBaseWage, pickCodeMealPrice, pickCodeMealPriceAt, mealByCode, round, num, pickEffective, pickUnitPrice, pickMealRate, workDays, autoMealQty, mealAmount, calcLine };
+// Lương khoán / thù lao: số tiền cố định, khấu trừ thuế TNCN vãng lai = số tiền × tỷ lệ (mặc định 10%) khi số tiền chi từ ngưỡng trở lên
+// (Thông tư 111/2013/TT-BTC: chi từ 2.000.000 đ/lần trở lên mới khấu trừ 10%); thực nhận = số tiền − thuế
+function calcFixedLine({ amount, taxPct = 10, threshold = 2000000 }) {
+  const a = round(Math.max(0, num(amount))), pct = Math.min(100, Math.max(0, num(taxPct))), th = Math.max(0, num(threshold));
+  const taxed = a > 0 && a >= th, tax = taxed ? round(a * pct / 100) : 0;
+  return { amount: a, taxPct: pct, threshold: th, taxed, tax, net: a - tax };
+}
+module.exports = { calcFixedLine, bonusCoefOf, pickBaseWage, pickCodeMealPrice, pickCodeMealPriceAt, mealByCode, round, num, pickEffective, pickUnitPrice, pickMealRate, workDays, autoMealQty, mealAmount, calcLine };

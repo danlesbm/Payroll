@@ -11,18 +11,20 @@ const { posTitle } = require('../lib/names');
 const needPeople = req => { if (!req.auth.isAdmin && !req.auth.can('people', {})) forbid('Chỉ Admin hoặc người được phân quyền "Quản lý nhân sự" mới thực hiện được'); };
 router.get('/employees', api(async req => {
   needPeople(req);
-  const { q, groupId, sheetId, departmentId, unassigned, all, everyone } = req.query;
+  const { q, groupId, sheetId, departmentId, unassigned, all, everyone, payMode } = req.query;
   const p = [], w = [];
   if (!all) w.push(`v.sso_status='active'`);
   if (q) { p.push('%' + str(q).toLowerCase() + '%'); w.push(`(lower(v.full_name) LIKE $${p.length} OR lower(coalesce(v.email,'')) LIKE $${p.length} OR lower(coalesce(v.employee_code,'')) LIKE $${p.length})`); }
-  if (isUuid(groupId)) { p.push(groupId); w.push(`v.group_id=$${p.length}`); }
+  if (isUuid(groupId)) { p.push(groupId); w.push(`(v.group_id=$${p.length} OR (v.pay_mode='fixed' AND v.fixed_group_id=$${p.length}))`); }
+  if (payMode === 'coef' || payMode === 'fixed') { p.push(payMode); w.push(`v.pay_mode=$${p.length}`); }
   if (isUuid(sheetId)) { p.push(sheetId); w.push(`v.sheet_id=$${p.length}`); }
   if (isUuid(departmentId)) { p.push(departmentId); w.push(`v.department_id=$${p.length}`); }
   if (unassigned === '1') w.push('v.department_id IS NULL');
-  else if (!everyone) w.push('v.department_id IS NOT NULL');   // người chưa thuộc phòng nào: ẩn khỏi màn cấu hình (chỉ dùng everyone=1 khi gán quyền)
+  else if (!everyone) w.push(`(v.department_id IS NOT NULL OR v.sso_user_id LIKE 'manual:%')`);   // người chưa thuộc phòng nào: ẩn khỏi màn cấu hình (chỉ dùng everyone=1 khi gán quyền); người ngoài SSO (lương khoán) luôn hiện
   const stT = Object.fromEntries((await rows("SELECT key, value FROM settings WHERE key IN ('plant_title_head','plant_title_deputy')")).map(r => [r.key, r.value]));
   const list = await rows(`SELECT v.id, v.sso_user_id, v.employee_code, v.full_name, v.email, v.positions, v.title, v.title_manual, v.group_kind, v.employee_type, v.weekly_off, v.allowance_group_id, v.shift_no, v.is_lead, v.type_locked, v.pos_rank, v.sso_status, v.payroll_active,
-      v.sort_order, v.mapped_department_id, v.override_department_id, v.department_id, v.department_name, v.pay_department_name, v.pay_dept_id, v.sheet_name, v.group_name, v.sso_dept_ids
+      v.sort_order, v.mapped_department_id, v.override_department_id, v.department_id, v.department_name, v.pay_department_name, v.pay_dept_id, v.sheet_name, v.group_name, v.sso_dept_ids,
+      v.pay_mode, v.fixed_amount, v.fixed_tax_pct, v.fixed_group_id, (v.sso_user_id LIKE 'manual:%') AS manual
     FROM v_employees v ${w.length ? 'WHERE ' + w.join(' AND ') : ''}
     ORDER BY v.group_name NULLS LAST, v.department_sort NULLS LAST, v.department_name NULLS LAST, v.emp_order, v.sort_order, v.full_name LIMIT 3000`, p);
   // auto_title: chức danh tự động (khi chưa sửa tay) để hiện gợi ý ở ô Chức danh
@@ -31,7 +33,7 @@ router.get('/employees', api(async req => {
 }));
 
 // ---- Dùng chung: dựng câu lệnh UPDATE từ các trường được phép; chụp ảnh trạng thái cũ để hoàn tác ----
-const SNAP_COLS = ['employee_code', 'employee_type', 'shift_no', 'is_lead', 'allowance_group_id', 'weekly_off', 'payroll_active', 'sort_order', 'override_department_id', 'type_locked', 'title_manual'];
+const SNAP_COLS = ['employee_code', 'employee_type', 'shift_no', 'is_lead', 'allowance_group_id', 'weekly_off', 'payroll_active', 'sort_order', 'override_department_id', 'type_locked', 'title_manual', 'pay_mode', 'fixed_amount', 'fixed_tax_pct', 'fixed_group_id'];
 function buildSets(b, p) {
   const sets = [], add = (col, v) => { p.push(v); sets.push(`${col}=$${p.length}`); };
   if ('employee_code' in b) add('employee_code', str(b.employee_code) || null);
@@ -44,8 +46,21 @@ function buildSets(b, p) {
   if ('payroll_active' in b) add('payroll_active', b.payroll_active === true || b.payroll_active === 'true');
   if ('sort_order' in b) add('sort_order', Math.trunc(Number(b.sort_order) || 0));
   if ('override_department_id' in b) { if (b.override_department_id && !isUuid(b.override_department_id)) bad('Phòng không hợp lệ'); add('override_department_id', b.override_department_id || null); }
+  // Cách tính lương: theo hệ số (mặc định) hoặc lương khoán (số tiền / tháng, % thuế vãng lai, bảng lương khoán)
+  if ('pay_mode' in b) { if (!['coef', 'fixed'].includes(b.pay_mode)) bad('Cách tính lương không hợp lệ'); add('pay_mode', b.pay_mode); }
+  if ('fixed_amount' in b) { const n = Number(b.fixed_amount === '' || b.fixed_amount === null ? 0 : b.fixed_amount); if (!Number.isFinite(n) || n < 0 || n > 1e11) bad('Số tiền lương khoán không hợp lệ'); add('fixed_amount', Math.round(n)); }
+  if ('fixed_tax_pct' in b) { const n = Number(b.fixed_tax_pct === '' || b.fixed_tax_pct === null ? 10 : b.fixed_tax_pct); if (!Number.isFinite(n) || n < 0 || n > 100) bad('Tỷ lệ thuế vãng lai phải từ 0 đến 100%'); add('fixed_tax_pct', n); }
+  if ('fixed_group_id' in b) { if (b.fixed_group_id && !isUuid(b.fixed_group_id)) bad('Bảng lương khoán không hợp lệ'); add('fixed_group_id', b.fixed_group_id || null); }
+  // Họ tên chỉ sửa được với người ngoài SSO (người từ SSO lấy tên theo SSO)
+  if ('full_name' in b) { const nm = String(b.full_name ?? '').replace(/\s+/g, ' ').trim().slice(0, 120); if (!nm) bad('Họ tên không được để trống'); p.push(nm); sets.push(`full_name=CASE WHEN sso_user_id LIKE 'manual:%' THEN $${p.length} ELSE full_name END`); }
   if ('employee_type' in b || 'weekly_off' in b) sets.push('type_locked=true');
-  return { sets, stale: 'weekly_off' in b || 'allowance_group_id' in b || 'employee_type' in b || 'payroll_active' in b };
+  return { sets, stale: ['weekly_off', 'allowance_group_id', 'employee_type', 'payroll_active', 'pay_mode', 'fixed_amount', 'fixed_tax_pct', 'fixed_group_id'].some(k => k in b) };
+}
+// Bảng lương khoán được chọn phải là bảng lương loại "Lương khoán"
+async function checkFixedGroups(list) {
+  const ids = [...new Set(list.map(b => b.fixed_group_id).filter(Boolean))]; if (!ids.length) return;
+  const ok = new Set((await rows(`SELECT id FROM groups WHERE pay_type='fixed' AND id = ANY($1::uuid[])`, [ids])).map(r => r.id));
+  if (ids.some(i => !ok.has(i))) bad('Bảng lương được chọn không phải bảng lương khoán (tạo ở tab Tổ chức, Loại tính lương = Lương khoán)');
 }
 async function snapshot(req, label, ids) {
   if (!ids.length) return null;
@@ -61,6 +76,7 @@ router.post('/employees-batch', api(async req => {
   const ch = Array.isArray(req.body?.changes) ? req.body.changes : [];
   if (!ch.length) bad('Chưa có thay đổi nào');
   if (ch.some(c => !isUuid(c.id))) bad('Mã nhân sự không hợp lệ');
+  await checkFixedGroups(ch);
   const prepared = ch.map(c => { const { id, ...f } = c; const p = [id]; const { sets, stale } = buildSets(f, p); if (!sets.length) bad('Không có gì để cập nhật'); return { id, p, sets, stale }; });
   const snap = await snapshot(req, `Lưu thay đổi ${prepared.length} người`, prepared.map(x => x.id));
   await tx(async c => { for (const x of prepared) await c.query(`UPDATE employees SET ${x.sets.join(',')}, updated_at=now() WHERE id=$1`, x.p); });
@@ -76,6 +92,7 @@ router.patch('/employees-bulk', api(async req => {
   const b = req.body || {}, ids = Array.isArray(b.ids) ? b.ids : [];
   if (!ids.length || ids.some(i => !isUuid(i))) bad('Chưa chọn người nào');
   const { ids: _x, ...f } = b, p = [ids];
+  await checkFixedGroups([f]);
   const { sets, stale } = buildSets(f, p);
   if (!sets.length) bad('Không có gì để cập nhật');
   const snap = await snapshot(req, `Áp dụng hàng loạt cho ${ids.length} người`, ids);
@@ -108,12 +125,41 @@ router.post('/employees-autotype', api(async req => {
 router.patch('/employees/:id', api(async req => {
   needPeople(req);
   if (!isUuid(req.params.id)) bad('Mã không hợp lệ');
+  await checkFixedGroups([req.body || {}]);
   const p = [req.params.id], { sets, stale } = buildSets(req.body || {}, p);
   if (!sets.length) bad('Không có gì để cập nhật');
   if (!(await one(`UPDATE employees SET ${sets.join(',')}, updated_at=now() WHERE id=$1 RETURNING id`, p))) bad('Không tìm thấy nhân sự', 404);
   if (stale) await require('../services/payroll').markStale(pool);
   await normalizeShifts();
   await audit(req, 'employee.update', 'employee', req.params.id, req.body);
+  return { ok: true };
+}));
+
+// Người ngoài SSO (lao động thời vụ, người nhận thù lao không có tài khoản SSO): tạo tay, luôn tính lương khoán
+router.post('/employees-manual', api(async req => {
+  needPeople(req);
+  const b = req.body || {}, name = String(b.full_name ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (!name) bad('Nhập họ tên');
+  const f = { pay_mode: 'fixed', fixed_amount: b.fixed_amount ?? 0, fixed_tax_pct: b.fixed_tax_pct ?? 10, fixed_group_id: b.fixed_group_id || null, employee_code: b.employee_code, title_manual: b.title_manual };
+  await checkFixedGroups([f]);
+  const r = await tx(async c => {
+    const row = (await c.query(`INSERT INTO employees(sso_user_id, full_name, employee_type, sso_status) VALUES('manual:' || gen_random_uuid(), $1, 'worker', 'active') RETURNING id`, [name])).rows[0];
+    const p = [row.id], { sets } = buildSets(f, p);
+    await c.query(`UPDATE employees SET ${sets.join(',')} WHERE id=$1`, p);
+    return row;
+  });
+  await require('../services/payroll').markStale(pool);
+  await audit(req, 'employee.manual_add', 'employee', r.id, { full_name: name, ...f });
+  return { ok: true, id: r.id };
+}));
+router.delete('/employees-manual/:id', api(async req => {
+  needPeople(req);
+  if (!isUuid(req.params.id)) bad('Mã không hợp lệ');
+  const e = await one(`SELECT id, full_name FROM employees WHERE id=$1 AND sso_user_id LIKE 'manual:%'`, [req.params.id]);
+  if (!e) bad('Chỉ xoá được người ngoài SSO', 404);
+  if (await one('SELECT 1 AS x FROM payroll_lines WHERE employee_id=$1 LIMIT 1', [e.id])) bad('Người này đã có trong bảng lương nên không xoá được. Hãy bỏ tick "Tính lương".', 409);
+  await pool.query('DELETE FROM employees WHERE id=$1', [e.id]);
+  await audit(req, 'employee.manual_delete', 'employee', e.id, e);
   return { ok: true };
 }));
 

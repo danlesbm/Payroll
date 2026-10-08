@@ -16,6 +16,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
   if (!group) bad('Không tìm thấy bảng lương', 404);
   const existing = (await q(c, 'SELECT * FROM payroll_runs WHERE group_id=$1 AND year=$2 AND month=$3 FOR UPDATE', [groupId, year, month]))[0];
   if (existing && !['draft', 'submitted'].includes(existing.status)) bad('Bảng lương đã trình Giám đốc hoặc đã khoá, không thể tính lại. Cần trả lại / Admin mở khoá trả lại trước.', 409);
+  if (group.pay_type === 'fixed') return calculateFixedRun(c, { group, year, month, userId });
 
   // 1) Mọi bảng chấm công của nhóm phải được cấp 2 "Nhận"
   const sheets = await q(c, 'SELECT * FROM sheets WHERE group_id=$1 AND active ORDER BY sort_order, name', [groupId]);
@@ -36,7 +37,7 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
   const emps = await q(c, `SELECT ve.id, ve.employee_type, ve.shift_no, ve.pay_dept_id AS department_id, ve.weekly_off, ve.allowance_group_id,
     (SELECT d.meal_mode FROM departments d WHERE d.id=ve.department_id) AS meal_mode
     FROM period_employees pe JOIN periods p ON p.id=pe.period_id JOIN sheets s ON s.id=p.sheet_id JOIN v_employees ve ON ve.id=pe.employee_id
-    WHERE s.group_id=$1 AND p.year=$2 AND p.month=$3 AND ve.payroll_active`, [groupId, year, month]);
+    WHERE s.group_id=$1 AND p.year=$2 AND p.month=$3 AND ve.payroll_active AND ve.pay_mode<>'fixed'`, [groupId, year, month]);   // người lương khoán tính ở bảng lương khoán
   const seen = new Set();
   const employees = emps.filter(e => !seen.has(e.id) && seen.add(e.id));
   const ids = employees.map(e => e.id);
@@ -154,6 +155,29 @@ async function calculateRun(c, { groupId, year, month, standardDays, userId }) {
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, [run.id, l.employeeId, l.workDays, l.r.insuranceSalary + l.r.safetyAllowance, l.r.bonus, l.r.allowance - l.r.safetyAllowance, l.r.meal, l.r.deduction, l.r.net, JSON.stringify(l.detail), l.r.nightSalary, l.r.nightBonus, l.r.extraSalary, l.r.extraBonus, l.r.holidaySalary, l.r.holidayBonus]);
   return { run, count: lines.length, pending, warnings: lines.filter(l => l.detail.warnings.length).length };
 }
+// Bảng lương khoán: mỗi người lương khoán được chọn vào bảng này nhận số tiền khoán của tháng (nhập riêng tháng này, nếu không thì số tiền mặc định ở Nhân sự),
+// khấu trừ thuế vãng lai theo tỷ lệ của từng người khi số tiền đạt ngưỡng của bảng. Không cần bảng chấm công. Số tiền 0 = tháng này không chi.
+const fixedMembers = (c, groupId, year, month) => q(c, `SELECT e.id, e.full_name, e.fixed_amount, e.fixed_tax_pct, m.amount AS month_amount, m.note AS month_note
+    FROM employees e LEFT JOIN fixed_pay_months m ON m.employee_id=e.id AND m.year=$2 AND m.month=$3
+    WHERE e.pay_mode='fixed' AND e.fixed_group_id=$1 AND e.payroll_active AND e.sso_status='active' AND NOT e.excluded ORDER BY e.sort_order, e.full_name`, [groupId, year, month]);
+async function calculateFixedRun(c, { group, year, month, userId }) {
+  const lines = [];
+  for (const e of await fixedMembers(c, group.id, year, month)) {
+    const own = e.month_amount !== null && e.month_amount !== undefined;
+    const r = calc.calcFixedLine({ amount: own ? e.month_amount : e.fixed_amount, taxPct: e.fixed_tax_pct, threshold: group.tax_threshold });
+    if (!r.amount) continue;
+    lines.push({ employeeId: e.id, r, detail: { fixedPay: true, amount: r.amount, amountSource: own ? 'month' : 'default', note: e.month_note || null, taxPct: r.taxPct, taxThreshold: r.threshold, taxed: r.taxed, tax: r.tax,
+      salaryNet: r.net, bonusNet: 0, warnings: [] } });
+  }
+  const run = (await q(c, `INSERT INTO payroll_runs(group_id, year, month, status, standard_days, std_override, stale, calculated_at, calculated_by, provisional_note, min_info)
+      VALUES($1,$2,$3,'draft',0,NULL,false,now(),$4,NULL,NULL)
+      ON CONFLICT (group_id, year, month) DO UPDATE SET stale=false, calculated_at=now(), calculated_by=EXCLUDED.calculated_by RETURNING *`, [group.id, year, month, userId]))[0];
+  await c.query('DELETE FROM payroll_lines WHERE run_id=$1', [run.id]);
+  // Thuế vãng lai ghi ở cột Khoản trừ; Thực lĩnh = số tiền khoán − thuế
+  for (const l of lines) await c.query(`INSERT INTO payroll_lines(run_id, employee_id, work_days, insurance_salary, bonus, allowance, meal_amount, deduction, net, detail) VALUES($1,$2,0,0,0,0,0,$3,$4,$5)`,
+    [run.id, l.employeeId, l.r.tax, l.r.net, JSON.stringify(l.detail)]);
+  return { run, count: lines.length, pending: [], warnings: 0 };
+}
 // Cấp 2 chỉnh công -> bảng lương nháp tự tính lại; lỗi thì đánh dấu "cần tính lại"
 async function recalcIfExists(c, sheetId, year, month, userId) {
   const g = (await q(c, 'SELECT group_id FROM sheets WHERE id=$1', [sheetId]))[0];
@@ -175,4 +199,4 @@ async function autoCalc(c, sheetId, year, month, userId) {
   catch (e) { await c.query('ROLLBACK TO SAVEPOINT autocalc'); if (run) await c.query('UPDATE payroll_runs SET stale=true WHERE id=$1', [run.id]); }
 }
 const markStale = (c, groupId = null) => c.query(`UPDATE payroll_runs SET stale=true WHERE status IN ('draft','submitted') AND ($1::uuid IS NULL OR group_id=$1::uuid)`, [groupId]);
-module.exports = { calculateRun, recalcIfExists, autoCalc, markStale };
+module.exports = { calculateRun, recalcIfExists, autoCalc, markStale, fixedMembers };

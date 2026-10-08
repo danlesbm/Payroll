@@ -445,3 +445,12 @@ test('phương pháp tính làm lễ / làm thêm: mặc định quy chế lươ
   assert.match(METHODS.A, /145\/2020/); assert.equal(METHODS.B, 'Theo quy chế lương riêng');
   assert.equal(c.calcLine({ standardDays: 24, workDays: 24 }).premiumMethod, 'B');
 });
+test('lương khoán: khấu trừ thuế vãng lai theo tỷ lệ khi đạt ngưỡng', () => {
+  assert.deepEqual(c.calcFixedLine({ amount: 5000000 }), { amount: 5000000, taxPct: 10, threshold: 2000000, taxed: true, tax: 500000, net: 4500000 });
+  assert.equal(c.calcFixedLine({ amount: 2000000 }).tax, 200000);          // đúng ngưỡng vẫn khấu trừ
+  assert.equal(c.calcFixedLine({ amount: 1999999 }).tax, 0);               // dưới ngưỡng: không khấu trừ
+  assert.equal(c.calcFixedLine({ amount: 1500000, threshold: 0 }).net, 1350000);
+  assert.equal(c.calcFixedLine({ amount: 3000000, taxPct: 0 }).net, 3000000);   // đã cam kết (mẫu 08) → đặt 0%
+  assert.equal(c.calcFixedLine({ amount: 3333333, taxPct: 10 }).tax, 333333);
+  assert.equal(c.calcFixedLine({ amount: -5 }).net, 0);
+});
