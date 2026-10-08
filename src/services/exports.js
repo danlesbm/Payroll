@@ -114,6 +114,8 @@ async function salaryXlsx(c, groupId, year, month) {
     { h: 'TT', w: 5, tt: true, val: () => '' }, { h: 'Họ và tên', w: 26, val: l => l.full_name }, { h: 'Chức vụ', w: 14, val: l => l.positions || '' },
     { h: 'Số công tiêu chuẩn (Ntc)', w: 10, fmt: 'General', sum: true, val: l => n(l.detail.standardDays) }, { h: 'Số công thực tế (Ntt)', w: 10, fmt: 'General', sum: true, val: l => n(l.work_days) },
     { h: 'Hệ số lương', w: 10, fmt: COEF, sum: true, val: l => n(l.detail.insCoef) },
+    // Người có lương đóng BH thỏa thuận: số tiền này thay cho hệ số × lương cơ sở
+    ...(d.lines.some(l => n(l.detail.insAmount) > 0) ? [{ h: 'Lương đóng BH thỏa thuận', w: 14, fmt: MONEY, sum: true, val: l => n(l.detail.insAmount) || null }] : []),
     ...(hasLabor ? [{ h: 'Xếp loại LĐ', w: 9, al: 'center', val: l => l.detail.laborGrade || '' }, { h: 'Hệ số xếp loại', w: 9, fmt: COEF, val: l => n(l.detail.laborFactor ?? 1) }] : []),
     ...(hasSafety ? [{ h: 'Xếp loại an toàn', w: 9, val: l => l.detail.safetyGrade || '' }] : []),
     { h: 'Phụ cấp', w: 12, fmt: MONEY, sum: true, val: l => n(l.allowance) },
@@ -174,12 +176,13 @@ async function coefXlsx(c, groupId, year, month) {
   const hm = new Map(hist.map(h => [h.employee_id, h]));
   const rows = emps.map(e => ({ ...e, positions: posTitle(e, group.kind, st), vals: hm.get(e.id)?.vals || {}, eff: hm.get(e.id)?.effective_from || '' }));
   const types = await q(c, 'SELECT code, name, kind, is_total FROM coefficient_types WHERE active ORDER BY sort_order, code');
-  const ins = types.filter(t => t.kind === 'insurance'), bon = types.filter(t => t.kind === 'bonus' && !t.is_total), totT = types.filter(t => t.kind === 'bonus' && t.is_total), amt = types.filter(t => t.kind === 'amount');
+  const ins = types.filter(t => t.kind === 'insurance'), bon = types.filter(t => t.kind === 'bonus' && !t.is_total), totT = types.filter(t => t.kind === 'bonus' && t.is_total), amt = types.filter(t => t.kind === 'amount'), insAmt = types.filter(t => t.kind === 'ins_amount');
   const sumOf = list => l => list.reduce((s, t) => s + n(l.vals[t.code]), 0);
   const cols = [
     { h: 'TT', w: 5, tt: true, val: () => '' }, { h: 'Họ và tên', w: 26, val: l => l.full_name }, { h: 'Chức vụ', w: 14, val: l => l.positions || '' },
     ...ins.map(t => ({ h: t.name, g: 'Hệ số lương (bảo hiểm)', w: 12, fmt: COEF, sum: true, val: l => n(l.vals[t.code]) })),
     ...(ins.length > 1 ? [{ h: 'Tổng hệ số lương', g: 'Hệ số lương (bảo hiểm)', w: 12, fmt: COEF, sum: true, val: sumOf(ins) }] : []),
+    ...insAmt.map(t => ({ h: t.name, g: 'Hệ số lương (bảo hiểm)', w: 14, fmt: MONEY, sum: true, val: l => n(l.vals[t.code]) || null })),
     ...bon.map(t => ({ h: t.name, g: 'Hệ số thưởng', w: 12, fmt: COEF, sum: true, val: l => n(l.vals[t.code]) })),
     ...(bon.length ? [{ h: 'Tổng hệ số thưởng', g: 'Hệ số thưởng', w: 12, fmt: COEF, sum: true, val: l => sumOf(bon)(l) || sumOf(totT)(l) }] : []),
     ...amt.map(t => ({ h: t.name, g: 'Phụ cấp (số tiền)', w: 13, fmt: MONEY, sum: true, val: l => n(l.vals[t.code]) })),
@@ -327,4 +330,51 @@ async function fixedXlsx(c, groupId, year, month) {
   signBlock(ws, r, cols.length, await paySigners(c, d.group, d.run), d.st.place || 'Hà Nội', dateText(null, d.run));
   return wb.toBuffer();
 }
-module.exports = { salaryXlsx, bonusXlsx, coefXlsx, mealXlsx, attendanceXlsx, fixedXlsx };
+// Bảng thuế TNCN lũy tiến (tab "Lương + thuế TNCN" ở màn hình bảng lương): tháng 1–11 tạm tính, tháng 12 quyết toán cả năm (thuế cả năm − đã tạm tính).
+// Chỉ bảng lương theo hệ số (lương khoán đã khấu trừ thuế vãng lai). Số thuế lấy từ detail.pit lưu lúc tính lương; dòng tính trước khi có thuế lũy tiến để trống phần thuế.
+async function pitXlsx(c, groupId, year, month) {
+  if ((await q(c, 'SELECT pay_type FROM groups WHERE id=$1', [groupId]))[0]?.pay_type === 'fixed') { const e = new Error('Bảng lương khoán không tính thuế TNCN lũy tiến (đã khấu trừ thuế vãng lai) — xuất "Bảng lương khoán".'); e.status = 400; throw e; }
+  const d = await payrollData(c, groupId, year, month);
+  const lines = d.lines.filter(l => !l.detail.fixedPay), s12 = month === 12;
+  const P = l => (l.detail.pit && !l.detail.pit.missing ? l.detail.pit : null), pv = f => l => (P(l) ? f(P(l), l) : null);   // ô thuế: trống ở dòng chưa tính thuế
+  const ex = l => { const e = l.detail.pit?.exempt; return e ? n(e.night) + n(e.extra) + n(e.holiday) + n(e.meal) : n(l.night_salary) + n(l.night_bonus) + n(l.extra_salary) + n(l.extra_bonus) + n(l.holiday_salary) + n(l.holiday_bonus) + n(l.meal_amount); };
+  const taxable = l => (l.detail.pit ? n(l.detail.pit.lineTaxable) : n(l.insurance_salary) + n(l.allowance) + n(l.bonus));
+  const extras = x => n(x?.health) + n(x?.education) + n(x?.other);
+  const withheld = lines.some(l => P(l)?.withheld);
+  const note = l => (!l.detail.pit ? 'Chưa tính thuế — bấm Tính lại lương' : l.detail.pit.missing ? 'Chưa có biểu thuế TNCN của năm' : P(l).shared ? `Chia theo tỷ lệ với bảng lương khác cùng tháng (${P(l).shared.lines} bảng lương, thuế cả tháng ${new Intl.NumberFormat('vi-VN').format(n(P(l).tax))})` : '');
+  const M = (h, val, o = {}) => ({ h, w: 13, fmt: MONEY, sum: true, val, ...o });
+  const cols = [
+    { h: 'TT', w: 5, tt: true, val: () => '' }, { h: 'Họ và tên', w: 24, val: l => l.full_name }, { h: 'Chức vụ', w: 13, val: l => l.positions || '' },
+    ...(s12 ? [M('Thu nhập chịu thuế tháng 12', taxable, { w: 14 })]
+      : [M('Lương BH', l => n(l.insurance_salary), { g: 'Thu nhập chịu thuế' }), M('Phụ cấp', l => n(l.allowance), { g: 'Thu nhập chịu thuế' }), M('Thưởng', l => n(l.bonus), { g: 'Thu nhập chịu thuế' }), M('Cộng', taxable, { g: 'Thu nhập chịu thuế' })]),
+    M('Không tính thuế (làm đêm, làm thêm, làm lễ, ăn ca)', ex, { w: 14 }),
+    ...(s12 ? [
+      M('Thu nhập chịu thuế cả năm', pv(p => n(p.annual?.taxable)), { w: 14 }),
+      M('BH bắt buộc', pv(p => n(p.annual?.insurance)), { g: 'Giảm trừ cả năm' }), M('Bản thân', pv(p => n(p.annual?.self)), { g: 'Giảm trừ cả năm' }),
+      M('Người phụ thuộc', pv(p => n(p.annual?.dependent)), { g: 'Giảm trừ cả năm' }), M('Y tế, giáo dục, khác', pv(p => extras(p.annual?.extras)), { g: 'Giảm trừ cả năm' }),
+      M('Tổng giảm trừ cả năm', pv(p => n(p.annual?.totalDeduction)), { g: 'Giảm trừ cả năm', w: 14 }),
+      M('Thu nhập tính thuế cả năm', pv(p => n(p.annual?.assessable)), { w: 14 }),
+      M('Thuế cả năm', pv(p => n(p.annual?.tax)), { g: 'Thuế TNCN' }), M('Đã tạm tính tháng 1–11', pv(p => n(p.annual?.priorTax)), { g: 'Thuế TNCN' }),
+      M('Phải nộp thêm (+) / được hoàn (−)', pv((p, l) => n(l.pit_tax)), { g: 'Thuế TNCN', w: 14 })
+    ] : [
+      M('BH bắt buộc', pv(p => n(p.lineInsurance)), { g: 'Các khoản giảm trừ' }), M('Bản thân', pv(p => n(p.self)), { g: 'Các khoản giảm trừ' }),
+      { h: 'Số người phụ thuộc', g: 'Các khoản giảm trừ', w: 9, fmt: 'General', al: 'center', val: pv(p => n(p.dependents)) },
+      M('Người phụ thuộc', pv(p => n(p.dependent)), { g: 'Các khoản giảm trừ' }), M('Y tế, giáo dục, khác (cả năm ÷ 12)', pv(p => extras(p.extras)), { g: 'Các khoản giảm trừ' }),
+      M('Thu nhập tính thuế', pv(p => n(p.assessable)), { w: 14 }), M('Thuế TNCN tháng', pv((p, l) => n(l.pit_tax)), { w: 14 })
+    ]),
+    M(withheld ? 'Thực lĩnh (đã trừ thuế vào thưởng)' : 'Thực lĩnh', l => n(l.net), { w: 14 }),
+    M('Thực lĩnh sau thuế', pv((p, l) => (p.withheld ? n(l.net) : n(l.net) - n(l.pit_tax))), { w: 14 }),
+    { h: 'Ghi chú', w: 20, val: note }
+  ];
+  const p0 = lines.map(P).find(Boolean), sch = p0 ? null : await require('./pit').scheduleFor(c, year), fm = v => new Intl.NumberFormat('vi-VN').format(Math.round(n(v)));
+  const sy = p0?.scheduleYear || sch?.year;
+  const info = [sy ? `Biểu thuế năm ${sy}: giảm trừ bản thân ${fm(p0 ? p0.self : sch.selfDeduction)} đ/tháng, người phụ thuộc ${fm(p0 ? p0.dependentAmount : sch.dependentDeduction)} đ/người/tháng; ${s12 ? 'quyết toán: bản thân 12 tháng, người phụ thuộc theo số tháng được tính, y tế / giáo dục / khác cả năm theo mức tối đa; phải nộp thêm = thuế cả năm − đã tạm tính tháng 1–11 (âm = được hoàn)' : 'tạm tính: mức trần bậc cả năm ÷ 12, y tế / giáo dục / khác cả năm ÷ 12'}.` : 'Chưa có biểu thuế TNCN của năm.',
+    `Thu nhập chịu thuế = lương BH (gồm phụ cấp an toàn) + phụ cấp + thưởng; không tính thuế: tiền ăn ca, làm đêm, làm thêm, làm lễ tết. ${withheld ? 'Thuế đã trừ vào thưởng thực nhận.' : 'Chỉ ước tính, chưa trừ vào lương.'} Đơn vị tính: đồng.`];
+  const wb = new Workbook(), ws = wb.sheet('Thuế TNCN');
+  let r = head(ws, cols.length, d.st.company_name, s12 ? [`BẢNG QUYẾT TOÁN THUẾ TNCN NĂM ${year} ${String(d.group.name).toUpperCase()}`, `TÍNH VÀO LƯƠNG THÁNG ${pad(month)} NĂM ${year}`] : title('BẢNG TÍNH THUẾ TNCN TẠM TÍNH', d.group, year, month));
+  info.forEach((t, i) => { ws.box(r - 1 + i, 1, r - 1 + i, cols.length, t, { i: true, al: 'center', wrap: true, sz: 10 }); ws.height(r - 1 + i, 28); });
+  r = table(ws, r + 2, cols, byDept(lines, 'pay_department_name', d.group.kind === 'plant'));
+  signBlock(ws, r, cols.length, await paySigners(c, d.group, d.run), d.st.place || 'Hà Nội', dateText(null, d.run));
+  return wb.toBuffer();
+}
+module.exports = { salaryXlsx, bonusXlsx, coefXlsx, mealXlsx, attendanceXlsx, fixedXlsx, pitXlsx };

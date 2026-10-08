@@ -7,6 +7,8 @@ const { crud } = require('../lib/crud');
 const { markStale } = require('../services/payroll');
 const { applyExclusions } = require('../sso');
 const { isEmpType } = require('../lib/emptypes');
+const P = require('../lib/pit');
+const pitSvc = require('../services/pit');
 const admin = req => req.auth.needAdmin();
 const needHr = req => { if (!req.auth.isAdmin && !req.auth.can('hr', {})) bad('Chỉ Admin hoặc người được phân quyền "Quản lý hệ số, đơn giá" mới được sửa', 403); };
 const needAtt = req => { if (!req.auth.isAdmin && !req.auth.can('cfg_att', {}) && !req.auth.can('hr', {})) bad('Chỉ Admin hoặc người được phân quyền "Cài đặt chấm công" mới được sửa', 403); };
@@ -15,11 +17,13 @@ const staleAll = async () => { await markStale(pool); };
 router.get('/', api(async req => {
   if (!req.auth.isAdmin && !req.auth.assignments.length) bad('Bạn không có quyền xem cấu hình', 403);
   const sensitive = req.auth.isAdmin || req.auth.assignments.some(a => ['hr', 'cfg_att', 'l2', 'l3', 'director'].includes(a.role));
-  const [codes, mealTypes, codeMeals, coefTypes, dedTypes, settings] = await Promise.all([
+  const [codes, mealTypes, codeMeals, coefTypes, dedTypes, settings, pitSchedules, salaryFunds] = await Promise.all([
     rows('SELECT * FROM attendance_codes ORDER BY sort_order, code'), rows('SELECT * FROM meal_types ORDER BY sort_order, name'),
     rows('SELECT code, meal_type_id, quantity FROM code_meals'), rows('SELECT * FROM coefficient_types ORDER BY sort_order, code'),
-    rows('SELECT * FROM deduction_types ORDER BY sort_order, code'), rows('SELECT key, value FROM settings')]);
-  const out = { codes, mealTypes, codeMeals, coefTypes, dedTypes, settings: Object.fromEntries(settings.map(s => [s.key, s.value])) };
+    rows('SELECT * FROM deduction_types ORDER BY sort_order, code'), rows('SELECT key, value FROM settings'),
+    rows(`SELECT s.*, e.full_name AS updated_by_name, EXISTS (SELECT 1 FROM payroll_runs r WHERE r.status='locked' AND r.year >= s.year AND r.year < COALESCE((SELECT min(n.year) FROM pit_schedules n WHERE n.year > s.year), 9999)) AS has_locked FROM pit_schedules s LEFT JOIN employees e ON e.sso_user_id=s.updated_by ORDER BY s.year DESC`),
+    rows('SELECT * FROM salary_funds ORDER BY sort_order, name')]);
+  const out = { codes, mealTypes, codeMeals, coefTypes, dedTypes, settings: Object.fromEntries(settings.map(s => [s.key, s.value])), pitSchedules, salaryFunds };
   if (sensitive) {
     out.codeMealPrices = await rows(`SELECT p.*, g.name AS group_name, e.full_name AS by_name,
       (SELECT q.amount FROM code_meal_prices q WHERE q.code=p.code AND q.group_id IS NOT DISTINCT FROM p.group_id AND (q.effective_from, q.id) < (p.effective_from, p.id) ORDER BY q.effective_from DESC, q.id DESC LIMIT 1) AS prev_amount
@@ -79,11 +83,39 @@ crud(router, { path: 'meal-types', table: 'meal_types', guard: needAtt, after: s
   { k: 'code', required: true, label: 'Mã' }, { k: 'name', required: true, label: 'Tên loại suất' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
 crud(router, { path: 'coefficient-types', table: 'coefficient_types', pk: 'code', pkType: 'text', guard: needHr, after: staleAll, fields: [
   { k: 'code', required: true, label: 'Mã' }, { k: 'name', required: true, label: 'Tên hệ số' },
-  { k: 'kind', type: 'enum', values: ['insurance', 'bonus', 'amount'], required: true, label: 'Loại' }, { k: 'is_total', type: 'bool' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
+  { k: 'kind', type: 'enum', values: ['insurance', 'bonus', 'amount', 'ins_amount'], required: true, label: 'Loại' }, { k: 'is_total', type: 'bool' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
 crud(router, { path: 'deduction-types', table: 'deduction_types', pk: 'code', pkType: 'text', guard: needHr, after: staleAll, fields: [
   { k: 'code', required: true, label: 'Mã' }, { k: 'name', required: true, label: 'Tên khoản trừ' },
   { k: 'calc', type: 'enum', values: ['pct_insurance', 'fixed'], required: true, label: 'Cách tính' }, { k: 'value', type: 'num', min: 0, max: 1e9, label: 'Giá trị' },
+  { k: 'pit_deductible', type: 'bool' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
+// Quỹ lương (khối) để tổng hợp lương theo nguồn quỹ; quy tắc tự xếp: hdqt | bks | office | shift | plant (mỗi quy tắc chỉ gắn 1 quỹ)
+crud(router, { path: 'salary-funds', table: 'salary_funds', guard: admin, after: staleAll, fields: [
+  { k: 'code', required: true, label: 'Mã' }, { k: 'name', required: true, label: 'Tên quỹ lương' },
+  { k: 'rule', type: 'enum', nullable: true, values: ['hdqt', 'bks', 'office', 'shift', 'plant'], label: 'Tự xếp' }, { k: 'note', label: 'Ghi chú' },
   { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
+
+// ===== Biểu thuế TNCN theo năm (bậc thuế động, giảm trừ bản thân / người phụ thuộc, mức tối đa y tế / giáo dục) =====
+const moneyOk = (v, label, nullable) => { if (nullable && (v === '' || v === null || v === undefined)) return null; const n = Number(v); if (!Number.isFinite(n) || n < 0 || n > 1e12) bad(`"${label}" phải là số tiền không âm`); return Math.round(n); };
+router.put('/pit-schedules/:year', api(async req => {
+  needHr(req);
+  const year = Number(req.params.year); if (!Number.isInteger(year) || year < 2000 || year > 2200) bad('Năm áp dụng không hợp lệ');
+  const b = req.body || {};
+  let brackets; try { brackets = P.validateBrackets(b.brackets); } catch (e) { bad(e.message); }
+  const v = [year, moneyOk(b.self_deduction, 'Giảm trừ bản thân'), moneyOk(b.dependent_deduction, 'Giảm trừ người phụ thuộc'), moneyOk(b.health_cap, 'Mức tối đa chi phí y tế', true), moneyOk(b.education_cap, 'Mức tối đa chi phí giáo dục', true), JSON.stringify(brackets), str(b.note).slice(0, 500) || null, req.auth.user.id];
+  const r = await one(`INSERT INTO pit_schedules(year, self_deduction, dependent_deduction, health_cap, education_cap, brackets, note, updated_by, updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now())
+    ON CONFLICT (year) DO UPDATE SET self_deduction=EXCLUDED.self_deduction, dependent_deduction=EXCLUDED.dependent_deduction, health_cap=EXCLUDED.health_cap, education_cap=EXCLUDED.education_cap,
+      brackets=EXCLUDED.brackets, note=EXCLUDED.note, updated_by=EXCLUDED.updated_by, updated_at=now() RETURNING *`, v);
+  await pitSvc.staleFromYear(pool, year); await audit(req, 'pit_schedule.save', 'pit_schedules', String(year), { ...b, brackets });
+  return r;
+}));
+router.delete('/pit-schedules/:year', api(async req => {
+  needHr(req);
+  const year = Number(req.params.year); if (!Number.isInteger(year) || year < 2000 || year > 2200) bad('Năm áp dụng không hợp lệ');
+  if ((await one('SELECT count(*)::int AS n FROM pit_schedules')).n <= 1) bad('Phải giữ ít nhất 1 biểu thuế', 409);
+  const r = await one('DELETE FROM pit_schedules WHERE year=$1 RETURNING *', [year]); if (!r) bad('Không tìm thấy biểu thuế', 404);
+  await pitSvc.staleFromYear(pool, year); await audit(req, 'pit_schedule.delete', 'pit_schedules', String(year), r);
+  return { ok: true };
+}));
 
 // Tiền ăn ca theo ký hiệu công (mỗi ký hiệu một mức; có thể riêng cho từng bảng lương; lưu theo ngày hiệu lực, giữ lịch sử)
 router.post('/code-meal-prices/bulk', api(async req => {
@@ -190,7 +222,9 @@ const SETTING_KEYS = {
   plant_title_head: v => String(v ?? '').trim().slice(0, 60),
   plant_title_deputy: v => String(v ?? '').trim().slice(0, 60),
   safety_coef: v => String(v ?? ''),
-  require_l1: v => String(v === true || v === 'true')
+  require_l1: v => String(v === true || v === 'true'),
+  premium_method: v => (v === 'A' || v === 'B' ? v : bad('Phương pháp tính tiền làm lễ, làm thêm không hợp lệ')),
+  pit_withhold: v => (v === 'none' || v === 'bonus' ? v : bad('Cách xử lý thuế TNCN tạm tính không hợp lệ'))
 };
 router.put('/settings', api(async req => {
   admin(req);
@@ -199,7 +233,7 @@ router.put('/settings', api(async req => {
   if (Number(clean.year_min) && Number(clean.year_max) && Number(clean.year_min) > Number(clean.year_max)) bad('Năm nhỏ nhất phải ≤ năm lớn nhất');
   for (const [k, v] of Object.entries(clean)) await pool.query(`INSERT INTO settings(key, value, updated_by) VALUES($1,$2,$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`, [k, v, req.auth.user.id]);
   if ('exclude_patterns' in clean) await applyExclusions(pool);
-  if ('standard_days' in clean || 'meal_in_net' in clean) await staleAll();
+  if (['standard_days', 'meal_in_net', 'premium_method', 'pit_withhold'].some(k => k in clean)) await staleAll();
   await audit(req, 'settings.update', 'settings', null, clean);
   return { ok: true };
 }));

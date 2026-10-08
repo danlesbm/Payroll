@@ -77,7 +77,9 @@ router.get('/:groupId/:year/:month', api(async req => {
   // Bảng lương khoán: danh sách mọi người thuộc bảng (kể cả người tháng này không chi) để nhập số tiền riêng của tháng
   const fixedEdit = fixed && (st === 'none' || st === 'draft' ? req.auth.can('l2', ctx) : st === 'submitted' && req.auth.can('l3', ctx));
   const members = fixed ? (await fixedMembers(pool, groupId, year, month)).map(m => ({ id: m.id, full_name: m.full_name, fixed_amount: m.fixed_amount, fixed_tax_pct: m.fixed_tax_pct, month_amount: m.month_amount, month_note: m.month_note })) : undefined;
-  return { group, year, month, run, runLabel: run ? RUN_LABEL[run.status] : 'Chưa tính', lines, actions, sheets: sheetOut(sheets), members, fixedEdit,
+  // Thuế TNCN: cách xử lý (chỉ ước tính / trừ vào thưởng) và biểu thuế của năm — cho tab "Lương + thuế TNCN"
+  const pit = fixed ? null : { withhold: (await one(`SELECT value FROM settings WHERE key='pit_withhold'`))?.value || 'none', schedule: await require('../services/pit').scheduleFor(pool, year), settleMonth: 12 };
+  return { group, year, month, run, runLabel: run ? RUN_LABEL[run.status] : 'Chưa tính', lines, actions, sheets: sheetOut(sheets), members, fixedEdit, pit,
     coefTypes: await rows('SELECT code, name, kind, is_total FROM coefficient_types WHERE active ORDER BY sort_order, code'), names: Object.fromEntries(names.map(n => [n.sso_user_id, n.full_name])) };
 }));
 
@@ -258,16 +260,16 @@ router.get('/:groupId/:year/:month/export', async (req, res) => {
   res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="bang-luong-${year}-${String(month).padStart(2, '0')}.csv"` });
   res.send('﻿' + [head, ...body].map(r => r.map(csvCell).join(',')).join('\r\n'));
 });
-// Xuất Excel theo bảng lương (nhóm): luong | thuong | he-so | an-ca
+// Xuất Excel theo bảng lương (nhóm): luong | thuong | he-so | an-ca | khoan | pit (thuế TNCN tạm tính / quyết toán tháng 12)
 router.get('/:groupId/:year/:month/export/:what', async (req, res) => {
   const groupId = groupParam(req); const { year, month } = ym(req);
   if (!req.auth.canAny(PAY_ROLES, gctx(groupId))) bad('Bạn không được phân quyền xem bảng lương này', 403);
-  const fn = { luong: X.salaryXlsx, thuong: X.bonusXlsx, 'he-so': X.coefXlsx, 'an-ca': X.mealXlsx, khoan: X.fixedXlsx }[req.params.what];
+  const fn = { luong: X.salaryXlsx, thuong: X.bonusXlsx, 'he-so': X.coefXlsx, 'an-ca': X.mealXlsx, khoan: X.fixedXlsx, pit: X.pitXlsx }[req.params.what];
   if (!fn) bad('Loại bảng không hợp lệ', 404);
   const g = await one('SELECT name FROM groups WHERE id=$1', [groupId]); if (!g) bad('Không tìm thấy bảng lương', 404);
   const buf = await fn(pool, groupId, year, month);
   await audit(req, 'export.' + req.params.what, 'group', groupId, { year, month });
-  sendXlsx(res, buf, `${{ luong: 'bang-luong', thuong: 'bang-thuong', 'he-so': 'bang-he-so', 'an-ca': 'tien-an-ca', khoan: 'bang-luong-khoan' }[req.params.what]}-${slug(g.name)}-${year}-${pad2(month)}.xlsx`);
+  sendXlsx(res, buf, `${{ luong: 'bang-luong', thuong: 'bang-thuong', 'he-so': 'bang-he-so', 'an-ca': 'tien-an-ca', khoan: 'bang-luong-khoan', pit: month === 12 ? 'quyet-toan-thue-tncn' : 'thue-tncn' }[req.params.what]}-${slug(g.name)}-${year}-${pad2(month)}.xlsx`);
 });
 router.get('/meals/:groupId/:year/:month', api(async req => {
   const groupId = groupParam(req); const { year, month } = ym(req);
@@ -403,7 +405,7 @@ async function assertItemEditable(c, req, employeeId, year, month) {
   return e;
 }
 // Thêm khoản thưởng/trừ cho 1 hoặc NHIỀU người cùng lúc.
-//  kind: bonus (thưởng thêm → bảng thưởng) | deduction (trừ vào lương → bảng lương) | bonus_deduction (trừ vào thưởng, vd thuế TNCN → bảng thưởng)
+//  kind: bonus (thưởng thêm → bảng thưởng) | deduction (trừ vào lương → bảng lương) | bonus_deduction (trừ vào thưởng → bảng thưởng; thuế TNCN tự tính xem services/pit.js)
 //  calc: fixed (mọi người cùng 1 số tiền) | coef_price (hệ số của từng người × đơn giá; basis = insurance | bonus)
 itemRouter.post('/', api(async req => {
   const b = req.body || {}, year = Number(b.year), month = Number(b.month);

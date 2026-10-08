@@ -83,6 +83,18 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='employees_pay_mode_chk') THEN ALTER TABLE employees ADD CONSTRAINT employees_pay_mode_chk CHECK (pay_mode IN ('coef','fixed')); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='employees_fixed_tax_chk') THEN ALTER TABLE employees ADD CONSTRAINT employees_fixed_tax_chk CHECK (fixed_tax_pct >= 0 AND fixed_tax_pct <= 100); END IF;
 END $$;
+-- v6.24: quỹ lương (khối) để tổng hợp lương theo nguồn quỹ: HĐQT, Ban kiểm soát, văn phòng còn lại, công nhân vận hành, quản lý & hành chính nhà máy, sửa chữa…
+-- rule = quy tắc tự xếp khi người / bộ phận chưa chọn quỹ: hdqt | bks | office | shift (nhà máy, có kíp) | plant (nhà máy, không kíp); NULL = chỉ xếp khi được chọn
+CREATE TABLE IF NOT EXISTS salary_funds (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  code text UNIQUE NOT NULL, name text NOT NULL, rule text UNIQUE,
+  sort_order int NOT NULL DEFAULT 0, active boolean NOT NULL DEFAULT true, note text
+);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='salary_funds_rule_chk') THEN ALTER TABLE salary_funds ADD CONSTRAINT salary_funds_rule_chk CHECK (rule IS NULL OR rule IN ('hdqt','bks','office','shift','plant')); END IF;
+END $$;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS fund_id uuid REFERENCES salary_funds(id) ON DELETE SET NULL;   -- chọn tay ở Nhân sự (ưu tiên nhất); phải có trước view v_employees
+ALTER TABLE departments ADD COLUMN IF NOT EXISTS fund_id uuid REFERENCES salary_funds(id) ON DELETE SET NULL;
 ALTER TABLE sheets ADD COLUMN IF NOT EXISTS print_title text;
 ALTER TABLE sheets ADD COLUMN IF NOT EXISTS use_safety boolean NOT NULL DEFAULT false;
 ALTER TABLE sheets ADD COLUMN IF NOT EXISTS use_labor boolean NOT NULL DEFAULT true;
@@ -333,6 +345,8 @@ CREATE TABLE IF NOT EXISTS period_ratings (
 
 -- v6.8: chức danh hiển thị ở nhà máy (Trưởng phòng -> Giám đốc nhà máy ...); để trống = giữ nguyên
 INSERT INTO settings(key,value) VALUES ('plant_title_head','Giám đốc NM'),('plant_title_deputy','P. Giám đốc NM') ON CONFLICT (key) DO NOTHING;
+-- v6.23: phương pháp tính tiền làm lễ, làm thêm (A = Nghị định 145/2020, B = quy chế lương riêng); giữ B như đang dùng
+INSERT INTO settings(key,value,note) VALUES ('premium_method','B','Phương pháp tính tiền làm lễ, làm thêm: A = Nghị định 145/2020/NĐ-CP, B = quy chế lương riêng') ON CONFLICT (key) DO NOTHING;
 
 -- v6.10: quy trình mới (cấp 1 → cấp 2 → cấp 3 → Giám đốc). Mở rộng ràng buộc trạng thái; "adjusting" cũ gộp vào "pending_l2".
 ALTER TABLE periods DROP CONSTRAINT IF EXISTS periods_status_check;
@@ -549,3 +563,72 @@ CREATE TABLE IF NOT EXISTS fixed_pay_months (
   updated_by text, updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (employee_id, year, month)
 );
+
+-- ===== v6.24: thuế TNCN lũy tiến (người hưởng lương theo hệ số), người phụ thuộc, giảm trừ theo năm, lương đóng BH thỏa thuận, quỹ lương =====
+-- Biểu thuế theo năm tính thuế: dùng cho năm đó và các năm sau cho đến khi có biểu của năm mới hơn.
+-- brackets = [{"upto": mức trần CẢ NĂM của bậc (null = bậc cuối, không giới hạn), "rate": thuế suất %}] — số bậc tuỳ ý. Tạm tính tháng = mức trần ÷ 12.
+CREATE TABLE IF NOT EXISTS pit_schedules (
+  year int PRIMARY KEY CHECK (year BETWEEN 2000 AND 2200),
+  self_deduction numeric(16,2) NOT NULL DEFAULT 0,        -- giảm trừ bản thân / tháng
+  dependent_deduction numeric(16,2) NOT NULL DEFAULT 0,   -- giảm trừ mỗi người phụ thuộc / tháng
+  health_cap numeric(16,2),                               -- chi phí y tế được trừ tối đa / năm (NULL = không giới hạn, 0 = không áp dụng)
+  education_cap numeric(16,2),                            -- chi phí giáo dục được trừ tối đa / năm (như trên)
+  brackets jsonb NOT NULL DEFAULT '[]'::jsonb,
+  note text, updated_by text, updated_at timestamptz NOT NULL DEFAULT now()
+);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM settings WHERE key='v624_pit_seed') THEN
+    INSERT INTO pit_schedules(year, self_deduction, dependent_deduction, health_cap, education_cap, brackets, note) VALUES
+      (2020, 11000000, 4400000, 0, 0, '[{"upto":60000000,"rate":5},{"upto":120000000,"rate":10},{"upto":216000000,"rate":15},{"upto":384000000,"rate":20},{"upto":624000000,"rate":25},{"upto":960000000,"rate":30},{"upto":null,"rate":35}]',
+       'Luật Thuế TNCN 2007 (sửa đổi 2012, 2014), Nghị quyết 954/2020/UBTVQH14: 7 bậc, giảm trừ bản thân 11 triệu, người phụ thuộc 4,4 triệu / tháng'),
+      (2026, 15500000, 6200000, 23000000, 24000000, '[{"upto":120000000,"rate":5},{"upto":360000000,"rate":10},{"upto":720000000,"rate":20},{"upto":1200000000,"rate":30},{"upto":null,"rate":35}]',
+       'Luật Thuế TNCN số 109/2025/QH15 (áp dụng từ kỳ tính thuế 2026), Nghị quyết 110/2025/UBTVQH15, Nghị định 253/2026/NĐ-CP: 5 bậc, giảm trừ bản thân 15,5 triệu, người phụ thuộc 6,2 triệu / tháng; y tế tối đa 23 triệu, giáo dục tối đa 24 triệu / năm')
+    ON CONFLICT (year) DO NOTHING;
+    INSERT INTO settings(key,value,note) VALUES('v624_pit_seed','1','Đã cài biểu thuế TNCN mẫu: 2020 (7 bậc) và 2026 (5 bậc)');
+  END IF;
+END $$;
+-- Người phụ thuộc: tính giảm trừ từ tháng from_month đến hết tháng to_month (lưu ngày 01 của tháng; to_month NULL = vẫn đang tính)
+CREATE TABLE IF NOT EXISTS employee_dependents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  employee_id uuid NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  full_name text NOT NULL, relationship text, birth_date date, id_number text, tax_code text,
+  from_month date NOT NULL, to_month date, note text,
+  updated_by text, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT employee_dependents_months_chk CHECK (to_month IS NULL OR to_month >= from_month)
+);
+CREATE INDEX IF NOT EXISTS idx_dependents_emp ON employee_dependents(employee_id);
+-- Giảm trừ riêng của từng người theo từng năm: chi phí y tế, giáo dục (có mức tối đa ở biểu thuế) và khoản giảm trừ khác (từ thiện, hưu trí tự nguyện…)
+CREATE TABLE IF NOT EXISTS employee_tax_deductions (
+  employee_id uuid NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  year int NOT NULL CHECK (year BETWEEN 2000 AND 2200),
+  health numeric(16,2) NOT NULL DEFAULT 0 CHECK (health >= 0),
+  education numeric(16,2) NOT NULL DEFAULT 0 CHECK (education >= 0),
+  other numeric(16,2) NOT NULL DEFAULT 0 CHECK (other >= 0),
+  note text, updated_by text, updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (employee_id, year)
+);
+-- Khoản trừ nào được trừ khi tính thuế TNCN (BHXH, BHYT, BHTN bắt buộc: có; kinh phí công đoàn: không)
+ALTER TABLE deduction_types ADD COLUMN IF NOT EXISTS pit_deductible boolean NOT NULL DEFAULT false;
+-- Thuế TNCN của dòng lương: thu nhập chịu thuế (lương BH + phụ cấp + thưởng; không gồm làm đêm / thêm / lễ, ăn ca) và thuế tạm tính / quyết toán của dòng
+ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS pit_taxable numeric(16,2);
+ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS pit_tax numeric(16,2);
+ALTER TABLE payroll_lines ADD COLUMN IF NOT EXISTS fund_id uuid REFERENCES salary_funds(id);   -- quỹ lương lúc tính (giữ đúng lịch sử khi đổi bộ phận); quỹ đã có trong bảng lương thì không xoá được, chỉ Ngừng
+-- Loại hệ số "ins_amount": lương đóng bảo hiểm theo số tiền thỏa thuận (thay cho hệ số BH × lương cơ sở khi > 0)
+DO $$ DECLARE c text; BEGIN
+  FOR c IN SELECT conname FROM pg_constraint WHERE conrelid='coefficient_types'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%kind%' LOOP
+    EXECUTE 'ALTER TABLE coefficient_types DROP CONSTRAINT ' || quote_ident(c);
+  END LOOP;
+END $$;
+ALTER TABLE coefficient_types ADD CONSTRAINT coefficient_types_kind_chk CHECK (kind IN ('insurance','bonus','amount','ins_amount'));
+INSERT INTO settings(key,value,note) VALUES ('pit_withhold','none','Thuế TNCN tạm tính: none = chỉ hiển thị ước tính; bonus = trừ vào thưởng thực nhận') ON CONFLICT (key) DO NOTHING;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM settings WHERE key='v624_seed') THEN
+    UPDATE deduction_types SET pit_deductible=true WHERE code IN ('bhxh','bhyt','bhtn');
+    INSERT INTO coefficient_types(code, name, kind, sort_order) VALUES ('bh_thoa_thuan', 'Lương đóng BH thỏa thuận (VND)', 'ins_amount', 12) ON CONFLICT (code) DO NOTHING;
+    INSERT INTO salary_funds(code, name, rule, sort_order) VALUES
+      ('HDQT', 'Hội đồng quản trị', 'hdqt', 10), ('BKS', 'Ban kiểm soát', 'bks', 20), ('VP', 'Khối văn phòng (còn lại)', 'office', 30),
+      ('VH', 'Khối công nhân vận hành (ca kíp)', 'shift', 40), ('QL', 'Khối quản lý và hành chính nhà máy', 'plant', 50), ('SC', 'Khối sửa chữa', NULL, 60)
+    ON CONFLICT DO NOTHING;
+    INSERT INTO settings(key,value,note) VALUES('v624_seed','1','Đã cài: BHXH/BHYT/BHTN được trừ khi tính thuế TNCN, loại hệ số lương BH thỏa thuận, các quỹ lương mẫu');
+  END IF;
+END $$;

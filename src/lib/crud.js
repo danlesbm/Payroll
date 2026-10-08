@@ -14,7 +14,7 @@ function coerce(f, v) {
   }
   if (f.type === 'bool') return v === true || v === 'true';
   if (f.type === 'uuid') { if (v === null || v === '') return null; if (!isUuid(v)) bad(`"${L}" không hợp lệ`); return v; }
-  if (f.type === 'enum') { if (!f.values.includes(v)) bad(`"${L}" chỉ nhận: ${f.values.join(', ')}`); return v; }
+  if (f.type === 'enum') { if (f.nullable && (v === '' || v === null)) return null; if (!f.values.includes(v)) bad(`"${L}" chỉ nhận: ${f.values.join(', ')}`); return v; }
   return str(v);
 }
 function pickFields(fields, body, partial) {
@@ -27,7 +27,8 @@ function pickFields(fields, body, partial) {
   }
   return out;
 }
-const fkMessage = e => e.code === '22003' ? 'Giá trị số quá lớn, hãy kiểm tra lại.' : e.code === '23503' ? 'Không thể xoá/đổi vì còn dữ liệu đang dùng mục này. Hãy tắt "đang dùng" thay vì xoá.'
+const FK_GONE = 'Mục được chọn không còn tồn tại (có thể vừa bị xoá ở máy khác) — hãy tải lại trang rồi chọn lại.';
+const fkMessage = e => e.code === '22003' ? 'Giá trị số quá lớn, hãy kiểm tra lại.' : e.code === '23503' ? (/^insert or update/i.test(e.message || '') ? FK_GONE : 'Không thể xoá/đổi vì còn dữ liệu đang dùng mục này. Hãy tắt "đang dùng" thay vì xoá.')
   : e.code === '23505' ? 'Mã hoặc tên bị trùng với mục đã có.' : null;
 
 function crud(router, { path, table, pk = 'id', pkType = 'uuid', fields, guard, after }) {

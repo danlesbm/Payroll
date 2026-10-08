@@ -7,6 +7,8 @@ const { Workbook } = require('../lib/xlsx');
 const { monthEnd, validYM } = require('../lib/dates');
 const G = require('../services/grades');
 const { posTitle } = require('../lib/names');
+const pitSvc = require('../services/pit');
+const { fundSummary } = require('../services/funds');
 
 // Ai được xem báo cáo của bảng lương (nhóm) nào: cùng nhóm quyền xem bảng lương
 const PAY_ROLES = ['l2', 'l3', 'director', 'hr', 'view_pay'];
@@ -31,7 +33,7 @@ const MON = Array.from({ length: 12 }, (_, i) => 'T' + (i + 1));
 
 const statusSql = locked => locked ? `r.status='locked'` : `r.status IN ('submitted','pending_dir','locked')`;
 async function allowedGroups(req) {
-  const gs = await rows('SELECT id, code, name, kind FROM groups WHERE active ORDER BY sort_order, name');
+  const gs = await rows('SELECT id, code, name, kind, pay_type FROM groups WHERE active ORDER BY sort_order, name');
   return gs.filter(g => req.auth.canAny(PAY_ROLES, { groupId: g.id }));
 }
 const selfViewOn = async () => (await one(`SELECT value FROM settings WHERE key='self_view'`))?.value === 'true';
@@ -177,7 +179,7 @@ router.get('/people-compare/export', async (req, res) => {
 // ===== 3. Bảng thống kê lương từng nhân viên trong 1 tháng (đủ hệ số, lương, thưởng) =====
 const f4 = n => Math.round(num(n) * 10000) / 10000;
 async function typesList() { return rows(`SELECT code, name, kind FROM coefficient_types WHERE active ORDER BY sort_order, code`); }
-const KIND_VN = { insurance: 'hệ số BH', bonus: 'hệ số thưởng', amount: 'số tiền' };
+const KIND_VN = { insurance: 'hệ số BH', bonus: 'hệ số thưởng', amount: 'số tiền', ins_amount: 'lương BH thỏa thuận' };
 router.get('/employee-month/export', async (req, res) => {
   const groupId = str(req.query.groupId), year = Number(req.query.year), month = Number(req.query.month);
   if (!isUuid(groupId) || !validYM(year, month)) bad('Chọn bảng lương, năm và tháng');
@@ -199,7 +201,7 @@ router.get('/employee-month/export', async (req, res) => {
     col('STT', 5, 'text', (l, d, k) => k + 1), col('Họ tên', 24, 'text', l => l.full_name), col('Mã NV', 10, 'text', l => l.employee_code || ''), col('Bộ phận', 18, 'text', l => l.dept || ''),
     col('Chức danh', 18, 'text', l => posTitle(l, g.kind, stT)), col('Bậc lương BH', 14, 'text', l => gs.get(l.employee_id)?.label || ''),
     col('Ngày công', 9, 'n', l => num(l.work_days), { sum: true }), col('Công chuẩn', 9, 'n', (l, d) => num(d.standardDays)), col('Công tối thiểu', 9, 'n', (l, d) => d.minDays === undefined ? num(d.standardDays) : num(d.minDays)), col('Công thực tế − chuẩn (+/−)', 11, 'n', (l, d) => d.diffStd !== undefined ? num(d.diffStd) : num(l.work_days) - num(d.standardDays)), col('Công làm thêm (LT)', 10, 'n', (l, d) => num(d.otWork)), col('Công tăng ca', 9, 'n', (l, d) => num(d.otDays)), col('Tỷ lệ công lương', 9, 'k', (l, d) => f4(d.ratio)), col('Tỷ lệ công thưởng', 9, 'k', (l, d) => f4(d.ratioBonus ?? d.ratio)),
-    ...types.map(t => col(`${t.name} (${KIND_VN[t.kind]})`, 13, t.kind === 'amount' ? 'm' : 'k', (l, d) => f4(d.coefs?.[t.code]), { sum: t.kind === 'amount', coef: true })),
+    ...types.map(t => col(`${t.name} (${KIND_VN[t.kind]})`, 13, t.kind === 'amount' || t.kind === 'ins_amount' ? 'm' : 'k', (l, d) => f4(d.coefs?.[t.code]), { sum: t.kind === 'amount' || t.kind === 'ins_amount', coef: true })),
     col('Tổng hệ số BH', 11, 'k', (l, d) => f4(d.insCoef), { coef: true }), col('Tổng hệ số thưởng', 11, 'k', (l, d) => f4(d.bonusCoef), { coef: true }),
     col('Lương cơ sở', 13, 'm', (l, d) => num(d.baseWage)), col('Đơn giá lương', 13, 'm', (l, d) => num(d.unitPrice)), col('Xếp loại LĐ', 9, 'text', (l, d) => d.laborGrade || ''), col('Hệ số xếp loại', 9, 'k', (l, d) => d.laborFactor ?? '', { coef: true }),
     col('Lương BH (theo công)', 14, 'm', l => num(l.insurance_salary), { sum: true }), col('Lương làm đêm', 13, 'm', l => num(l.night_salary), { sum: true }), col('Lương làm thêm', 13, 'm', l => num(l.extra_salary), { sum: true }), col('Lương làm lễ/tết', 13, 'm', l => num(l.holiday_salary), { sum: true }), col('Phụ cấp', 13, 'm', l => num(l.allowance), { sum: true }), col('Khấu trừ', 13, 'm', l => num(l.deduction), { sum: true }),
@@ -214,6 +216,153 @@ router.get('/employee-month/export', async (req, res) => {
   const tr = 5 + lines.length; cols.forEach((c, i) => ws.set(tr, i + 1, i === 1 ? 'Cộng' : c.sum ? tot[i] : null, { ...ST.T, fmt: c.t === 'm' ? '#,##0' : '#,##0.##' }));
   ws.freeze = [4, 2];
   sendXlsx(res, wb.toBuffer(), `thong-ke-luong-nhan-vien-${year}-${pad2(month)}.xlsx`);
+});
+
+// ===== 5. Thuế TNCN cả năm theo từng người (người hưởng lương theo hệ số) =====
+// Tháng 1–11: thuế tạm tính (số đã lưu khi tính lương; tháng tính trước khi có chức năng thuế thì ước tính lại). Tháng 12: quyết toán = thuế cả năm − đã tạm tính.
+// locked=1: chỉ tháng đã khoá; mặc định gồm cả bảng lương nháp để theo dõi trong năm.
+async function pitYear(req, query) {
+  const year = Number(query.year); if (!yearOk(year)) bad('Năm không hợp lệ');
+  const groups = (await allowedGroups(req)).filter(g => g.kind && g.pay_type !== 'fixed'); if (!groups.length) forbid('Bạn không được phân quyền xem bảng lương theo hệ số nào');
+  const gid = query.groupId && isUuid(query.groupId) ? query.groupId : null;
+  if (gid && !groups.some(g => g.id === gid)) forbid('Bạn không được phân quyền xem bảng lương này');
+  const r = await pitSvc.yearSummary(pool, { year, groupIds: gid ? [gid] : groups.map(g => g.id), lockedOnly: query.locked === '1' });
+  const seen = new Map(), see = g => { if (!seen.has(g)) seen.set(g, req.auth.canAny(PAY_ROLES, { groupId: g })); return seen.get(g); };
+  r.employees.forEach(e => pitRedact(req, e, see));
+  return { ...r, locked: query.locked === '1', groupId: gid, groups: groups.map(g => ({ id: g.id, name: g.name })) };
+}
+// Bỏ số liệu nội bộ (theo từng bảng lương, phạm vi phân quyền) trước khi trả ra ngoài
+function pitStrip(e) { if (!e) return e; delete e.scope; for (const m of Object.values(e.months)) { delete m.byGroup; delete m.groupIds; } return e; }
+// Thuế tính trên MỌI dòng lương của người trong năm, nhưng người xem chỉ thấy số của các bảng lương mình được phân quyền:
+// tháng chỉ có lương ở bảng lương khác → ẩn; tháng có cả hai → chỉ phần của bảng được xem; không hiện quyết toán cả năm (vì gồm thu nhập ở bảng khác).
+// Tên người phụ thuộc, ghi chú giảm trừ: chỉ Admin, Quản lý nhân sự, Quản lý hệ số của bảng lương có người đó (như màn hình người phụ thuộc).
+function pitRedact(req, e, see) {
+  e.personal = !!(req.auth.isAdmin || req.auth.can('people', {}) || req.auth.can('hr', { groupId: e.scope?.groupId, sheetId: e.scope?.sheetId }));
+  if (!e.personal) { e.dependents = e.dependents.map(d => ({ from: d.from, to: d.to })); e.extras = { ...e.extras, note: '' }; }
+  let restricted = false;
+  for (const [k, m] of Object.entries(e.months)) {
+    const gs = Object.keys(m.byGroup || {}), vis = gs.filter(see);
+    if (vis.length === gs.length) continue;
+    restricted = true;
+    if (!vis.length) { e.months[k] = { hidden: true, taxable: null, insurance: null, exempt: null, net: null, dependents: null, tax: null, source: null, groups: [], locked: m.locked }; continue; }
+    const b = vis.map(g => m.byGroup[g]), sum = f => b.reduce((s, x) => s + x[f], 0);
+    e.months[k] = { ...m, taxable: sum('taxable'), insurance: sum('insurance'), exempt: sum('exempt'), net: sum('net'), tax: b.every(x => x.stored) ? sum('tax') : null, source: b.every(x => x.stored) ? 'stored' : null, groups: b.map(x => x.name), partial: true };
+  }
+  if (restricted) Object.assign(e, { restricted: true, annual: null, remaining: null, staleDecember: false, taxInMonths: Object.values(e.months).reduce((s, m) => s + num(m.tax), 0) });
+  return pitStrip(e);
+}
+router.get('/pit-year', api(async req => pitYear(req, req.query)));
+// ===== 6. Tổng hợp tiền lương theo quỹ lương (HĐQT, Ban kiểm soát, văn phòng, công nhân vận hành, quản lý & hành chính, sửa chữa…) =====
+async function funds(req, query) {
+  const year = Number(query.year); if (!yearOk(year)) bad('Năm không hợp lệ');
+  const from = Math.min(12, Math.max(1, Number(query.from) || 1)), to = Math.min(12, Math.max(from, Number(query.to) || 12));
+  const groups = await allowedGroups(req); if (!groups.length) forbid('Bạn không được phân quyền xem bảng lương nào');
+  const locked = query.locked !== '0';
+  return { ...(await fundSummary(pool, { groupIds: groups.map(g => g.id), year, from, to, statusSql: statusSql(locked) })), locked };
+}
+router.get('/funds', api(async req => funds(req, req.query)));
+
+// ----- Xuất Excel: thuế TNCN cả năm (tổng hợp + bảng kê từng người), quỹ lương -----
+const ymTxt = s => s ? `${+String(s).slice(5, 7)}/${String(s).slice(0, 4)}` : '';
+const ymN = s => +String(s).slice(0, 4) * 12 + +String(s).slice(5, 7) - 1;
+const depMonthsIn = (d, year) => d.from ? Math.max(0, Math.min(year * 12 + 11, d.to ? ymN(d.to) : Infinity) - Math.max(year * 12, ymN(d.from)) + 1) : 0;   // số tháng được giảm trừ trong năm
+const vnd = n => Math.round(num(n)).toLocaleString('vi-VN');
+const PIT_NOTE = 'Thu nhập chịu thuế = lương BH (gồm phụ cấp an toàn) + phụ cấp + thưởng; KHÔNG gồm tiền làm đêm, làm thêm, làm lễ tết và toàn bộ tiền ăn ca. Tháng 1–11: thuế tạm tính (mức trần từng bậc cả năm ÷ 12; giảm trừ bản thân, người phụ thuộc theo tháng; y tế, giáo dục, khác = số cả năm ÷ 12). Tháng 12: quyết toán = thuế cả năm − thuế đã tạm tính tháng 1–11 (âm = được hoàn).';
+const schTxt = s => s ? `Biểu thuế áp dụng: năm ${s.year} — giảm trừ bản thân ${vnd(s.selfDeduction)} đ/tháng, người phụ thuộc ${vnd(s.dependentDeduction)} đ/người/tháng; chi phí y tế tối đa ${s.healthCap === null ? 'không giới hạn' : vnd(s.healthCap) + ' đ'}, giáo dục tối đa ${s.educationCap === null ? 'không giới hạn' : vnd(s.educationCap) + ' đ'} / năm.` : 'Chưa có biểu thuế TNCN (Cấu hình › Thuế TNCN): chưa tính được thuế.';
+const monthNote = m => [m.source === 'estimate' ? 'ước tính (tháng tính lương trước khi có thuế TNCN)' : '', m.notWithheld ? 'chưa trừ vào lương / thưởng — thu ở quyết toán tháng 12' : '', m.tax === null ? 'chưa tính thuế' : '', m.locked ? '' : 'bảng lương chưa khoá', m.partial ? 'chỉ phần ở bảng lương được xem: ' + m.groups.join(', ') : (m.groups || []).length > 1 ? 'nhiều bảng lương: ' + m.groups.join(', ') : ''].filter(Boolean).join('; ');
+const RESTRICT_TXT = 'Người này có lương ở bảng lương bạn không được phân quyền xem: chỉ hiện số của bảng lương được xem, không hiện quyết toán cả năm (quyết toán gồm thu nhập ở mọi bảng lương).';
+// Ghi bảng kê thuế cả năm của 1 người (tháng → quyết toán) từ dòng r; trả về dòng tiếp theo. Cột: 1 nhãn, 2–6 số, 7 ghi chú.
+function pitBlock(ws, r, e, sch, year, title) {
+  const M = ST.M, B = { ...ST.M, b: true }, L = ST.C, LB = { ...ST.C, b: true }, NOTE = { ...ST.C, i: true, color: '6B7280', wrap: true };
+  ws.set(r++, 1, title || `${e.name}${e.code ? ' · Mã NV ' + e.code : ''}${e.department ? ' — ' + e.department : ''}${e.group ? ' — ' + e.group : ''}`, { b: true, sz: 12 });
+  ['Tháng', 'Thu nhập chịu thuế', 'Không tính thuế (đêm, thêm, lễ, ăn ca)', 'BH bắt buộc được trừ', 'Số người phụ thuộc', 'Thuế TNCN', 'Ghi chú'].forEach((t, i) => ws.set(r, i + 1, t, ST.H)); ws.height(r, 32); r++;
+  const t = { taxable: 0, exempt: 0, insurance: 0, tax: 0 };
+  for (let k = 1; k <= 12; k++) {
+    const m = e.months[k]; if (!m) continue;
+    ws.set(r, 1, k === 12 ? 'Tháng 12 (quyết toán năm)' : `Tháng ${k} (tạm tính)`, L);
+    if (m.hidden) { for (let c = 2; c <= 6; c++) ws.set(r, c, null, M); ws.set(r, 7, 'lương ở bảng lương bạn không được phân quyền xem', NOTE); r++; continue; } ws.set(r, 2, num(m.taxable), M); ws.set(r, 3, num(m.exempt), M); ws.set(r, 4, num(m.insurance), M); ws.set(r, 5, num(m.dependents), ST.D);
+    ws.set(r, 6, m.tax === null ? null : num(m.tax), k === 12 ? B : M); ws.set(r, 7, monthNote(m), NOTE); r++;
+    t.taxable += num(m.taxable); t.exempt += num(m.exempt); t.insurance += num(m.insurance); t.tax += num(m.tax);
+  }
+  ws.set(r, 1, 'Cả năm', ST.T); ws.set(r, 2, t.taxable, ST.T); ws.set(r, 3, t.exempt, ST.T); ws.set(r, 4, t.insurance, ST.T); ws.set(r, 5, null, ST.T); ws.set(r, 6, t.tax, ST.T); ws.set(r, 7, 'tổng thuế các tháng', { ...ST.T, i: true }); r += 2;
+  const a = e.annual;
+  if (!a) { ws.set(r++, 1, e.restricted ? RESTRICT_TXT : schTxt(null), { i: true, color: e.restricted ? '92400E' : 'B91C1C' }); return r + 1; }
+  ws.box(r, 1, r, 7, `Quyết toán thuế TNCN năm ${year}`, { ...ST.H, al: 'left' }); r++;
+  const step = (label, v, note, bold) => { ws.set(r, 1, label, bold ? LB : L); ws.set(r, 2, v, bold ? B : M); ws.box(r, 3, r, 7, note || '', NOTE); r++; };
+  const capTxt = (got, cap) => `đã kê ${vnd(got)} đ${cap === null || cap === undefined ? '' : `, tối đa ${vnd(cap)} đ/năm`}`;
+  step('Tổng thu nhập chịu thuế cả năm', a.taxable, 'lương BH + phụ cấp + thưởng của các tháng ở trên', true);
+  step('(−) Bảo hiểm bắt buộc', -a.insurance, 'BHXH, BHYT, BHTN người lao động đóng');
+  step('(−) Giảm trừ bản thân', -a.self, `${a.selfMonths} tháng × ${vnd(sch.selfDeduction)} đ`);
+  step('(−) Giảm trừ người phụ thuộc', -a.dependent, a.dependentMonths ? `${a.dependentMonths} tháng-người × ${vnd(a.dependentAmount)} đ` : 'không có người phụ thuộc trong năm');
+  step('(−) Chi phí y tế', -a.extras.health, capTxt(e.extras.health, sch.healthCap));
+  step('(−) Chi phí giáo dục', -a.extras.education, capTxt(e.extras.education, sch.educationCap));
+  step('(−) Khoản giảm trừ khác', -a.extras.other, e.extras.note || '');
+  step('= Thu nhập tính thuế cả năm', a.assessable, `tổng giảm trừ ${vnd(a.totalDeduction)} đ${a.taxable < a.totalDeduction ? ' — giảm trừ lớn hơn thu nhập nên bằng 0' : ''}`, true);
+  if (a.parts.length) {
+    ['Bậc', 'Thu nhập tính thuế từ', 'đến', 'Thuế suất', 'Thu nhập trong bậc', 'Thuế'].forEach((h, i) => ws.set(r, i + 1, h, ST.H)); r++;
+    for (const p of a.parts) { ws.set(r, 1, `Bậc ${p.level}`, L); ws.set(r, 2, p.from, M); ws.set(r, 3, p.to === null ? 'trở lên' : p.to, p.to === null ? { ...L, al: 'right' } : M); ws.set(r, 4, `${p.rate}%`, { ...L, al: 'right' }); ws.set(r, 5, p.base, M); ws.set(r, 6, p.tax, M); r++; }
+  }
+  step('Thuế TNCN cả năm', a.tax, a.parts.length ? 'cộng thuế các bậc' : 'thu nhập tính thuế bằng 0 nên không có thuế', true);
+  step(a.priorBasis === 'withheld' ? '(−) Đã khấu trừ tháng 1–11' : '(−) Đã tạm tính tháng 1–11', -a.priorTax, a.priorBasis === 'withheld' ? 'chỉ cộng các tháng đã trừ thuế vào thưởng / lương' : '');
+  step('= Tháng 12 quyết toán', a.settle, a.settle > 0 ? 'phải nộp thêm' : a.settle < 0 ? 'được hoàn (trả lại) cho người lao động' : 'không phải nộp thêm', true);
+  if (e.settled) step('Số đã tính ở bảng lương tháng 12', e.months[12]?.tax ?? null, e.staleDecember ? 'khác số tính lại hiện nay (đổi người phụ thuộc, giảm trừ hoặc lương tháng 1–11 sau khi tính tháng 12) — tháng 12 cần tính lại' : (e.months[12]?.source === 'estimate' ? 'ước tính' : ''));
+  else { const n = Object.keys(e.months).length; ws.box(r, 1, r, 7, `Chưa có bảng lương tháng 12: quyết toán ở trên là dự kiến, theo ${n} tháng đã có.${n < 12 ? ` Số dự kiến coi như năm chỉ có ${n} tháng: mức trần bậc thuế, giảm trừ y tế / giáo dục / khác quy về ${n}/12 năm, giảm trừ bản thân ${n} tháng — thu nhập đều thì gần bằng tổng thuế đã tạm tính. Số chính thức tính ở bảng lương tháng 12 (bản thân đủ 12 tháng).` : ''}`, NOTE); ws.height(r, 30); r++; }
+  step('Còn phải nộp (+) / được hoàn (−)', e.remaining, 'thuế cả năm − tổng thuế các tháng ở trên', true);
+  ws.box(r, 1, r, 7, 'Người phụ thuộc: ' + (e.dependents.length ? (e.personal === false ? `${e.dependents.length} người (họ tên chỉ Admin, Quản lý nhân sự, Quản lý hệ số xem được): ` : '') + e.dependents.map(d => `${d.name ? d.name + ' ' : ''}(từ ${ymTxt(d.from)}${d.to ? ' đến ' + ymTxt(d.to) : ', đang tính'}; ${depMonthsIn(d, year)} tháng trong năm)`).join('; ') : 'không có'), { ...ST.C, wrap: true }); ws.height(r, 30); r++;
+  return r + 1;
+}
+// Tổng hợp + chi tiết thuế TNCN cả năm của các bảng lương được xem
+router.get('/pit-year/export', async (req, res) => {
+  const d = await pitYear(req, req.query), year = d.year, sch = d.schedule, list = d.employees;
+  const gname = d.groupId ? d.groups.find(g => g.id === d.groupId)?.name : '';
+  const wb = new Workbook(), ws = wb.sheet(`Tổng hợp thuế ${year}`);
+  ws.set(1, 1, `TỔNG HỢP THUẾ TNCN NĂM ${year}${gname ? ' — ' + gname : ''} (người hưởng lương theo hệ số; ${d.locked ? 'chỉ tháng đã khoá' : 'gồm bảng lương chưa khoá'})`, { b: true, sz: 13 });
+  ws.set(2, 1, schTxt(sch), { i: true });
+  const heads = ['STT', 'Họ tên', 'Mã NV', 'Bộ phận', 'Bảng lương', ...MON.map(x => `Thuế ${x}`), 'Tổng thu nhập chịu thuế', 'Tổng giảm trừ', 'Thu nhập tính thuế cả năm', 'Thuế cả năm', 'Đã tạm tính (T1–T11)', 'Tháng 12 quyết toán', 'Còn phải nộp (+) / được hoàn (−)', 'Ghi chú'];
+  heads.forEach((h, i) => ws.set(4, i + 1, h, ST.H)); ws.height(4, 46);
+  ws.col(1, 5); ws.col(2, 24); ws.col(3, 10); ws.col(4, 18); ws.col(5, 14); for (let c = 6; c <= 17; c++) ws.col(c, 12); for (let c = 18; c <= 24; c++) ws.col(c, 15); ws.col(25, 40);
+  const tot = Array(heads.length).fill(0);
+  list.forEach((e, k) => {
+    const r = 5 + k, a = e.annual, est = Object.entries(e.months).filter(([, m]) => m.source === 'estimate').map(([m]) => 'T' + m);
+    const v = [...MON.map((_, i) => e.months[i + 1] ? e.months[i + 1].tax : null), a?.taxable ?? null, a?.totalDeduction ?? null, a?.assessable ?? null, a?.tax ?? null, a?.priorTax ?? null, e.settled ? e.months[12].tax : null, e.remaining];
+    ws.set(r, 1, k + 1, ST.C); ws.set(r, 2, e.name, ST.C); ws.set(r, 3, e.code || '', ST.C); ws.set(r, 4, e.department || '', ST.C); ws.set(r, 5, e.group || '', ST.C);
+    v.forEach((x, i) => { ws.set(r, 6 + i, x === null || x === undefined ? null : num(x), i === 15 || i === 18 ? { ...ST.M, b: true } : ST.M); tot[5 + i] += num(x); });
+    ws.set(r, 25, [e.restricted ? 'có lương ở bảng lương bạn không được xem: chỉ hiện thuế của bảng lương được xem, không có quyết toán' : '', e.staleDecember ? 'Tháng 12 cần tính lại' : '', !e.settled && a ? 'chưa có tháng 12: cột "Còn phải nộp" là quyết toán dự kiến' : '', est.length ? 'ước tính: ' + est.join(', ') : '', e.dependents.length ? `${e.dependents.length} người phụ thuộc` : ''].filter(Boolean).join('; '), { ...ST.C, wrap: true });
+  });
+  const tr = 5 + list.length; for (let c = 1; c <= 25; c++) ws.set(tr, c, c === 2 ? 'Cộng' : c >= 6 && c <= 24 ? tot[c - 1] : null, ST.T);
+  ws.set(tr + 2, 1, PIT_NOTE, { i: true }); ws.set(tr + 3, 1, 'Còn phải nộp / được hoàn = thuế cả năm − tổng thuế các tháng: bằng 0 khi tháng 12 đã quyết toán đúng; chưa có tháng 12 thì là số quyết toán dự kiến.', { i: true });
+  ws.freeze = [4, 2];
+  const wd = wb.sheet('Chi tiết'); wd.col(1, 34); for (let c = 2; c <= 6; c++) wd.col(c, 17); wd.col(7, 44);
+  wd.set(1, 1, `BẢNG KÊ THUẾ TNCN NĂM ${year} TỪNG NGƯỜI`, { b: true, sz: 13 }); wd.set(2, 1, schTxt(sch), { i: true }); wd.set(3, 1, PIT_NOTE, { i: true });
+  let r = 5; list.forEach((e, k) => { r = pitBlock(wd, r, e, sch, year, `${k + 1}. ${e.name}${e.code ? ' · Mã NV ' + e.code : ''}${e.department ? ' — ' + e.department : ''}${e.group ? ' — ' + e.group : ''}`); });
+  if (!list.length) wd.set(r, 1, 'Không có người hưởng lương theo hệ số nào có bảng lương trong năm.', { i: true });
+  await audit(req, 'report.pit_export', 'report', null, { year, groupId: d.groupId, locked: d.locked, people: list.length });
+  sendXlsx(res, wb.toBuffer(), `thue-tncn-nam-${year}.xlsx`);
+});
+// Tổng hợp tiền lương theo quỹ lương: toàn công ty theo quỹ, rồi từng bảng lương
+const FUND_COLS = [['headcount', 'Số người'], ['insurance_salary', 'Lương BH'], ['allowance', 'Phụ cấp'], ['bonus', 'Thưởng'], ['premium', 'Làm đêm / thêm / lễ'], ['fixed_amount', 'Lương khoán / thù lao'], ['gross', 'Tổng quỹ lương'], ['meal_amount', 'Ăn ca'], ['deduction', 'Khấu trừ'], ['pit_tax', 'Thuế TNCN'], ['net', 'Thực lĩnh']];
+const KIND_GROUP = { plant: 'nhà máy', office: 'văn phòng' };
+router.get('/funds/export', async (req, res) => {
+  const d = await funds(req, req.query), per = d.from === d.to ? `THÁNG ${d.from}/${d.year}` : `THÁNG ${d.from}–${d.to}/${d.year}`;
+  const wb = new Workbook(), ws = wb.sheet(`Quỹ lương ${d.year}`);
+  ws.set(1, 1, `TỔNG HỢP TIỀN LƯƠNG THEO QUỸ LƯƠNG — ${per}`, { b: true, sz: 13 });
+  ws.set(2, 1, d.locked ? 'Chỉ tính bảng lương đã khoá (chính thức).' : 'Gồm cả bảng lương đang xử lý (chưa khoá) — số liệu chưa chính thức.', { i: true });
+  ws.col(1, 38); FUND_COLS.forEach((_, i) => ws.col(i + 2, i ? 15 : 9));
+  let r = 4;
+  const table = (title, rows, total) => {
+    ws.set(r++, 1, title, { b: true, sz: 12 });
+    ['Quỹ lương', ...FUND_COLS.map(c => c[1])].forEach((h, i) => ws.set(r, i + 1, h, ST.H)); ws.height(r, 32); r++;
+    for (const x of rows) { ws.set(r, 1, x.fundName, ST.C); FUND_COLS.forEach(([k], i) => ws.set(r, i + 2, num(x[k]), k === 'gross' || k === 'net' ? { ...ST.M, b: true } : ST.M)); r++; }
+    ws.set(r, 1, 'Cộng', ST.T); FUND_COLS.forEach(([k], i) => ws.set(r, i + 2, num(total?.[k]), ST.T)); r += 2;
+  };
+  if (!d.groups.length) ws.set(r++, 1, 'Không có dòng lương nào trong khoảng tháng đã chọn.', { i: true });
+  else { table('TOÀN CÔNG TY THEO QUỸ LƯƠNG', d.byFund, d.total); for (const g of d.groups) table(`Bảng lương: ${g.name} — ${g.payType === 'fixed' ? 'lương khoán / thù lao' : 'loại ' + (KIND_GROUP[g.kind] || g.kind)}`, g.rows, g.total); }
+  [ 'Tổng quỹ lương = Lương BH + Phụ cấp + Thưởng + Làm đêm / thêm / lễ (người hưởng lương theo hệ số) hoặc số tiền khoán / thù lao; chưa gồm tiền ăn ca. Thực lĩnh = sau khấu trừ (và thuế nếu cài trừ thuế vào thưởng).',
+    'Số người = số người khác nhau có dòng lương trong khoảng tháng; người chuyển quỹ hoặc chuyển bảng lương được đếm ở mỗi nơi nên cộng số người các dòng có thể lớn hơn dòng Cộng.',
+    'Xếp quỹ: quỹ chọn riêng cho người đó (Nhân sự) → quỹ của bộ phận (Tổ chức) → quy tắc tự xếp (Cấu hình › Quỹ lương): bộ phận HĐQT, Ban kiểm soát, bảng lương văn phòng, nhà máy có kíp (công nhân vận hành), nhà máy không kíp (quản lý và hành chính). Quỹ được ghi vào dòng lương lúc tính lương.'
+  ].forEach(t => ws.set(r++, 1, t, { i: true }));
+  await audit(req, 'report.funds_export', 'report', null, { year: d.year, from: d.from, to: d.to, locked: d.locked });
+  sendXlsx(res, wb.toBuffer(), `quy-luong-${d.year}-t${d.from}-${d.to}.xlsx`);
 });
 
 // ===== 4. Lương của tôi (tự xem) =====
@@ -261,7 +410,7 @@ router.get('/my/export/file', async (req, res) => {
     let r = 4; const sec = t => { ws.set(r, 1, t, { ...ST.H, al: 'left' }); ws.set(r, 2, null, ST.H); ws.set(r, 3, null, ST.H); r++; };
     const row = (a, v, note, bold) => { ws.set(r, 1, a, { ...ST.C, ...(bold ? { b: true } : {}) }); ws.set(r, 2, v, { ...(typeof v === 'number' ? (/^(Ngày công|Công)/.test(a) ? ST.D : ST.M) : ST.C), ...(bold ? { b: true } : {}), al: 'right' }); ws.set(r, 3, note || '', { ...ST.C, i: true, color: '6B7280' }); r++; };
     sec('1. Hệ số được hưởng trong tháng');
-    for (const t of types) if (num(d.coefs?.[t.code])) row(t.name, t.kind === 'amount' ? num(d.coefs[t.code]) : f4(d.coefs[t.code]), KIND_VN[t.kind]);
+    for (const t of types) if (num(d.coefs?.[t.code])) row(t.name, t.kind === 'amount' || t.kind === 'ins_amount' ? num(d.coefs[t.code]) : f4(d.coefs[t.code]), KIND_VN[t.kind]);
     row('Tổng hệ số bảo hiểm', f4(d.insCoef), '', true); row('Tổng hệ số thưởng', f4(d.bonusCoef), '', true);
     sec('2. Lương');
     row('Ngày công thực tế', num(l.work_days)); row('Công thực tế − công chuẩn (+ vượt / − thiếu)', d.diffStd !== undefined ? num(d.diffStd) : num(l.work_days) - num(d.standardDays)); if (num(d.otWork)) row('Công làm thêm (ký hiệu LT)', num(d.otWork), 'trả riêng theo % của ký hiệu'); row('Công chuẩn', num(d.standardDays), d.weeklyOff ? (d.weeklyOff === 'sat_sun' ? 'nghỉ Thứ 7 + CN' : 'nghỉ Chủ nhật') + (d.holidayDays ? `, ${d.holidayDays} ngày lễ` : '') : ''); if (d.minDays !== undefined) row('Công tối thiểu', num(d.minDays), 'từ mức này đến công chuẩn vẫn hưởng đủ'); if (num(d.otDays)) row('Công tăng ca', num(d.otDays), `hệ số lương ×${d.otSalary ?? 1}, thưởng ×${d.otBonus ?? 1}`); row('Đơn giá ngày — lương', num(d.dailySalary), '(hệ số × lương cơ sở + phụ cấp) ÷ công chuẩn'); row('Đơn giá ngày — thưởng', num(d.dailyBonus), 'hệ số × đơn giá ÷ công chuẩn'); row('Tỷ lệ công (lương)', f4(d.ratio)); row('Tỷ lệ công (thưởng)', f4(d.ratioBonus ?? d.ratio)); row('Lương cơ sở', num(d.baseWage)); row('Xếp loại lao động', d.laborGrade || '—', d.laborFactor ? `hệ số ×${d.laborFactor}` : '');
@@ -289,6 +438,19 @@ router.get('/my/export/file', async (req, res) => {
   await audit(req, 'payroll.self_export', 'employee', emp.id, { year, month });
   sendXlsx(res, wb.toBuffer(), month ? `phieu-luong-${year}-${pad2(month)}.xlsx` : `luong-ca-nhan-${year}.xlsx`);
 });
+// Bảng kê thuế TNCN cả năm của chính mình (chỉ tháng đã khoá) — khai trước /my/:year/:month để không bị nhầm đường dẫn
+router.get('/my/pit/export', async (req, res) => {
+  const emp = await mine(req), year = Number(req.query.year); if (!yearOk(year)) bad('Năm không hợp lệ');
+  const r = await pitSvc.yearSummary(pool, { year, employeeIds: [emp.id], lockedOnly: true }), e = pitStrip(r.employees[0]);
+  if (!e) bad('Năm này chưa có tháng nào đã khoá được tính thuế TNCN', 404);
+  const wb = new Workbook(), ws = wb.sheet(`Thuế TNCN ${year}`);
+  ws.col(1, 34); for (let c = 2; c <= 6; c++) ws.col(c, 16); ws.col(7, 36);
+  ws.set(1, 1, `BẢNG KÊ THUẾ THU NHẬP CÁ NHÂN NĂM ${year}`, { b: true, sz: 14 });
+  ws.set(2, 1, schTxt(r.schedule), { i: true }); ws.set(3, 1, PIT_NOTE, { i: true }); ws.set(4, 1, 'Chỉ gồm các tháng bảng lương đã được Giám đốc khoá.', { i: true });
+  pitBlock(ws, 6, e, r.schedule, year, `Họ tên: ${emp.full_name}${emp.employee_code ? ' · Mã NV: ' + emp.employee_code : ''}${e.department ? ' — ' + e.department : ''}`);
+  await audit(req, 'payroll.self_pit_export', 'employee', emp.id, { year });
+  sendXlsx(res, wb.toBuffer(), `thue-tncn-ca-nhan-${year}.xlsx`);
+});
 router.get('/my/:year/:month', api(async req => {
   const emp = await mine(req);
   const year = Number(req.params.year), month = Number(req.params.month); if (!validYM(year, month)) bad('Tháng không hợp lệ');
@@ -298,6 +460,12 @@ router.get('/my/:year/:month', api(async req => {
   return { year, month, line: Object.fromEntries(MY_KEYS.map(k => [k, num(l[k])])),
     detail: { salaryNet: d.salaryNet, bonusNet: d.bonusNet, monthlyBonus: d.monthlyBonus, bonusDeduction: d.bonusDeduction, periodicDeduction: d.periodicDeduction, monthlyDeduction: d.monthlyDeduction, extras: d.extras || [], deductions: d.deductions || [] } };
 }));
+// Thuế TNCN cả năm của chính mình (chỉ các tháng đã khoá)
+router.get('/my/pit', api(async req => {
+  const emp = await mine(req), year = Number(req.query.year); if (!yearOk(year)) bad('Năm không hợp lệ');
+  const r = await pitSvc.yearSummary(pool, { year, employeeIds: [emp.id], lockedOnly: true });
+  return { year, schedule: r.schedule, me: pitStrip(r.employees[0]) || null, note: 'Chỉ tính các tháng bảng lương đã được Giám đốc khoá. Tháng 1–11 là thuế tạm tính, tháng 12 là quyết toán cả năm.' };
+}));
 // Cho giao diện biết có hiện tab "Lương của tôi" không
 async function selfTab(req) { return (await selfViewOn()) && !!(await myEmployee(req)); }
-module.exports = router; module.exports.selfTab = selfTab; module.exports.allowedGroups = allowedGroups;
+module.exports = router; module.exports.selfTab = selfTab; module.exports.allowedGroups = allowedGroups; module.exports.pitYear = pitYear; module.exports.funds = funds;

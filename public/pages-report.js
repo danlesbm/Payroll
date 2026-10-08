@@ -49,11 +49,11 @@ const legend = series => series.length > 1 || series[0]?.name ? `<div class="sma
 // ---------- Khung các tab thống kê ----------
 let RP_TAB = 'dept', RP_LOCKED = true, RP_YEAR = 0, RP_METRIC = 'net';
 PAGES.reports = async (me, root) => {
-  const tabs = [['dept', 'Theo bộ phận'], ['people', 'So sánh cá nhân (lương, thưởng)'], ['meal', 'Ăn ca cá nhân'], ['hist', 'Lịch sử tăng/giảm hệ số'], ['grades', 'Bậc lương & đến hạn tăng bậc']];
+  const tabs = [['dept', 'Theo bộ phận'], ['people', 'So sánh cá nhân (lương, thưởng)'], ['meal', 'Ăn ca cá nhân'], ['pit', 'Thuế TNCN theo năm'], ['funds', 'Tổng hợp theo quỹ lương'], ['hist', 'Lịch sử tăng/giảm hệ số'], ['grades', 'Bậc lương & đến hạn tăng bậc']];
   root.innerHTML = `<div class="sub">${tabs.map(t => `<button class="btn ${t[0] === RP_TAB ? '' : 'sec'}" data-t="${t[0]}">${t[1]}</button>`).join('')}</div><div id="rp"></div>`;
   root.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { RP_TAB = b.dataset.t; PAGES.reports(me, root); });
   const box = $('#rp');
-  try { await ({ dept: repDept, people: (m, b) => repPeople(m, b, 'pay'), meal: (m, b) => repPeople(m, b, 'meal'), hist: repHist, grades: repGrades })[RP_TAB](me, box); } catch (e) { safeErr(box, e); }
+  try { await ({ dept: repDept, people: (m, b) => repPeople(m, b, 'pay'), meal: (m, b) => repPeople(m, b, 'meal'), pit: repPit, funds: repFunds, hist: repHist, grades: repGrades })[RP_TAB](me, box); } catch (e) { safeErr(box, e); }
 };
 const lockedChk = on => `<label class="small"><input type="checkbox" id="lk" ${on ? 'checked' : ''}> Chỉ tính bảng đã khoá (chính thức)</label>`;
 
@@ -148,13 +148,14 @@ async function repHist(me, box) {
   const arrow = (a, b) => a === null ? '—' : a === b ? String(a) : `${a} → <b>${b}</b>`;
   box.innerHTML = `<div class="card"><h2 style="margin-top:0">Lịch sử tăng / giảm hệ số của nhân viên</h2>
     <div class="row"><select id="hg"><option value="">Tất cả bảng lương</option>${groups.map(g => `<option value="${g.id}" ${g.id === HF.gid ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>
-      <select id="hk">${[['insurance', 'Hệ số bảo hiểm (lương)'], ['bonus', 'Hệ số thưởng'], ['amount', 'Phụ cấp (số tiền)'], ['all', 'Tất cả hệ số']].map(([k, v]) => `<option value="${k}" ${k === HF.kind ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <select id="hk">${[['insurance', 'Hệ số bảo hiểm (lương)'], ['ins_amount', 'Lương đóng BH thỏa thuận (số tiền)'], ['bonus', 'Hệ số thưởng'], ['amount', 'Phụ cấp (số tiền)'], ['all', 'Tất cả hệ số']].map(([k, v]) => `<option value="${k}" ${k === HF.kind ? 'selected' : ''}>${v}</option>`).join('')}</select>
       <label>Từ ngày</label><input type="date" id="hf" value="${HF.from}"><label>đến</label><input type="date" id="ht" value="${HF.to}"><input id="hq" placeholder="Tìm tên…" value="${esc(HF.q)}" style="width:140px">
       <label class="small"><input type="checkbox" id="h1" ${HF.first ? 'checked' : ''}> Gồm lần nhập đầu tiên</label><button class="btn" id="hgo">Xem</button><button class="btn sec" id="hxl">Xuất Excel</button></div>
     <div class="muted small" style="margin-top:6px">Mỗi dòng là một lần hệ số thay đổi (theo ngày hiệu lực). Tổng ${d.total} lượt${d.total > 2000 ? ' (hiện 2.000 lượt gần nhất, Excel có đủ)' : ''}: <span style="color:#166534">▲ ${d.ups} lần tăng hệ số BH</span> · <span style="color:#b91c1c">▼ ${d.downs} lần giảm</span>.</div></div>
     <div class="card"><div class="scroll"><table class="rtb"><thead><tr><th>Hiệu lực từ</th><th>Họ tên</th><th>Bộ phận</th><th>Bậc</th><th class="n">Hệ số BH</th><th class="n">+/-</th><th class="n">%</th><th class="n">Hệ số thưởng</th><th>Chi tiết thay đổi</th><th>Ghi chú</th><th>Người nhập</th></tr></thead><tbody>
     ${d.rows.map(x => `<tr><td><b>${esc(x.ef)}</b></td><td>${esc(x.name)}</td><td class="muted">${esc(x.dept || '')}</td><td>${x.grade_before === x.grade_after ? esc(x.grade_after || '—') : `${esc(x.grade_before || '—')} → <b>${esc(x.grade_after || '—')}</b>`}</td>
-      <td class="n">${x.first ? `<b>${x.ins_after}</b> <span class="muted">(khởi tạo)</span>` : arrow(x.ins_before, x.ins_after)}</td><td class="n">${x.delta === null ? '' : `<span style="color:${x.delta >= 0 ? '#166534' : '#b91c1c'}">${x.delta > 0 ? '+' : ''}${Math.round(x.delta * 10000) / 10000}</span>`}</td><td class="n">${x.pct === null ? '' : pctTxt(x.pct)}</td>
+      ${!x.first && x.amt_delta ? `<td class="n" title="Lương đóng BH thỏa thuận (số tiền)">${money(x.ins_amount_before)} → <b>${money(x.ins_amount_after)}</b><div class="muted small">lương BH thỏa thuận</div></td><td class="n"><span style="color:${x.amt_delta >= 0 ? '#166534' : '#b91c1c'}">${x.amt_delta > 0 ? '+' : ''}${money(x.amt_delta)}</span></td><td class="n">${x.amt_pct === null ? '' : pctTxt(x.amt_pct)}</td>`
+        : `<td class="n">${x.first ? `<b>${x.ins_after}</b> <span class="muted">(khởi tạo)</span>` : arrow(x.ins_before, x.ins_after)}</td><td class="n">${x.delta === null ? '' : `<span style="color:${x.delta >= 0 ? '#166534' : '#b91c1c'}">${x.delta > 0 ? '+' : ''}${Math.round(x.delta * 10000) / 10000}</span>`}</td><td class="n">${x.pct === null ? '' : pctTxt(x.pct)}</td>`}
       <td class="n">${x.first ? x.bonus_after : arrow(x.bonus_before, x.bonus_after)}</td><td class="small" style="white-space:normal;min-width:200px">${esc(x.detail.join('; '))}</td><td class="small">${esc(x.note || '')}</td><td class="small">${esc(x.by || '')}</td></tr>`).join('') || '<tr><td colspan="11" class="muted">Không có lần thay đổi nào trong khoảng đã chọn.</td></tr>'}</tbody></table></div></div>`;
   const go = () => { HF.gid = $('#hg').value; HF.kind = $('#hk').value; HF.from = $('#hf').value; HF.to = $('#ht').value; HF.q = $('#hq').value; HF.first = $('#h1').checked; return qs2(); };
   const qs2 = () => `groupId=${HF.gid}&kind=${HF.kind}&from=${HF.from}&to=${HF.to}&q=${encodeURIComponent(HF.q)}&first=${HF.first ? 1 : 0}`;
@@ -212,6 +213,178 @@ async function repGrades(me, box) {
   if ($('#gcode')) $('#gcode').onchange = guard(async e => { await PUT('/api/reports/grade-coef', { code: e.target.value }); toast('Đã lưu'); again(); });
 }
 
+// ---------- 6. Thuế TNCN theo năm (người hưởng lương theo hệ số; lương khoán / thù lao đã khấu trừ 10% nên không có ở đây) ----------
+const RP_PIT = { year: 0, gid: '', locked: false, q: '' };
+const rpNorm = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[đĐ]/g, 'd').toLowerCase();
+const rpYm = s => s ? `${+s.slice(5, 7)}/${s.slice(0, 4)}` : '';
+const rpYmN = s => +s.slice(0, 4) * 12 + +s.slice(5, 7) - 1;
+const rpDepMonths = (d, y) => d.from ? Math.max(0, Math.min(y * 12 + 11, d.to ? rpYmN(d.to) : Infinity) - Math.max(y * 12, rpYmN(d.from)) + 1) : 0;   // số tháng được giảm trừ trong năm
+const rpSettle = v => v < 0 ? `<span style="color:#166534" title="Được hoàn">${money(v)}</span>` : money(v);   // tháng 12: âm = được hoàn
+const rpOwe = v => v === null || v === undefined ? '<span class="muted">–</span>' : v > 0 ? `<b style="color:#b91c1c" title="Còn phải nộp thêm">+${money(v)}</b>` : v < 0 ? `<b style="color:#166534" title="Được hoàn">−${money(-v)}</b>` : '<span class="muted">0</span>';
+// Nhập giảm trừ theo năm: Admin, Quản lý nhân sự, hoặc Quản lý hệ số (hr) của bảng lương đó (gid rỗng = có quyền ở bất kỳ bảng nào)
+const rpTaxAll = me => me.isAdmin || me.assignments.some(a => a.role === 'people' || (a.role === 'hr' && a.scope_type === 'all'));
+const rpTaxOn = (me, gid) => rpTaxAll(me) || me.assignments.some(a => a.role === 'hr' && a.scope_type === 'group' && (!gid || String(a.scope_id) === String(gid)));
+const rpCap = c => c === null || c === undefined ? 'không giới hạn' : Number(c) ? money(c) + ' đ' : 'không áp dụng';
+const rpSchTxt = s => s ? `Biểu thuế áp dụng: năm ${s.year} (${s.brackets.length} bậc) — giảm trừ bản thân ${money(s.selfDeduction)} đ/tháng, người phụ thuộc ${money(s.dependentDeduction)} đ/người/tháng; chi phí y tế tối đa ${rpCap(s.healthCap)}, giáo dục tối đa ${rpCap(s.educationCap)} / năm.` : '';
+async function repPit(me, box) {
+  const S = RP_PIT, year = S.year || me.now.year, yrs = []; for (let y = me.yearMin; y <= me.yearMax; y++) yrs.push(y);
+  const d = await GET(`/api/reports/pit-year?year=${year}&locked=${S.locked ? 1 : 0}${S.gid ? '&groupId=' + S.gid : ''}`), sch = d.schedule;
+  const stale = d.employees.filter(e => e.staleDecember);
+  box.innerHTML = `<div class="card"><div class="row"><h2 class="grow" style="margin:0">Thuế TNCN năm ${year} — người hưởng lương theo hệ số</h2>
+      <select id="py">${yrs.map(y => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select>
+      <select id="pg"><option value="">Tất cả bảng lương</option>${d.groups.map(g => `<option value="${g.id}" ${g.id === S.gid ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>
+      <label class="small"><input type="checkbox" id="plk" ${S.locked ? 'checked' : ''}> Chỉ tháng đã khoá</label><input id="pq" placeholder="Tìm tên…" value="${esc(S.q)}" style="width:150px">
+      ${d.groups.some(g => rpTaxOn(me, g.id)) ? '<button class="btn sec" id="pded">Nhập giảm trừ y tế, giáo dục, khác</button>' : ''}<button class="btn sec" id="pxl">Xuất Excel</button></div>
+    <div class="muted small">${esc(rpSchTxt(sch))} Thu nhập chịu thuế = lương BH (gồm phụ cấp an toàn) + phụ cấp + thưởng; không gồm tiền làm đêm, làm thêm, làm lễ tết và tiền ăn ca. Tháng 1–11 là thuế tạm tính, tháng 12 là quyết toán cả năm (âm = được hoàn). Người lương khoán / thù lao đã khấu trừ 10% nên không có ở đây. Bấm vào một người để xem bảng kê cả năm.</div>
+    ${sch ? '' : `<div class="err" style="margin-top:8px">Chưa có biểu thuế TNCN cho năm ${year} — cài ở Quản trị › Cấu hình › Thuế TNCN rồi tính lại lương.</div>`}
+    ${d.employees.some(e => e.restricted) ? `<div class="info small" style="margin:8px 0 0">Người có biểu tượng <b>◐</b> có lương ở bảng lương bạn không được phân quyền xem: chỉ hiện thuế của bảng lương bạn được xem, ô "ẩn" là tháng chỉ có lương ở bảng khác; không hiện quyết toán cả năm (vì quyết toán gồm thu nhập ở mọi bảng lương).</div>` : ''}
+    ${stale.length ? `<div class="warnbox" style="margin:8px 0 0"><b>Tháng 12 cần tính lại:</b> ${stale.map(e => esc(e.name)).join(', ')} — số quyết toán đã tính ở bảng lương tháng 12 khác số tính lại hiện nay (đã đổi người phụ thuộc, giảm trừ hoặc lương tháng 1–11 sau khi tính tháng 12). Mở bảng lương tháng 12 và bấm Tính lại lương.</div>` : ''}</div>
+    <div class="card" id="ptb"></div>`;
+  const paint = () => {
+    const q = rpNorm(S.q), list = d.employees.filter(e => !q || rpNorm(`${e.name} ${e.code || ''} ${e.department || ''}`).includes(q));
+    const sum = f => list.reduce((s, e) => s + (Number(f(e)) || 0), 0);
+    const cell = (e, k) => {
+      const m = e.months[k]; if (!m) return '<td class="n muted">·</td>';
+      if (m.hidden) return `<td class="n muted" title="Tháng ${k}: chỉ có lương ở bảng lương bạn không được phân quyền xem">ẩn</td>`;
+      const tip = `Tháng ${k}${k === 12 ? ' (quyết toán)' : ''}: thu nhập chịu thuế ${money(m.taxable)} · BH được trừ ${money(m.insurance)} · người phụ thuộc ${m.dependents}${Number(m.exempt) ? ' · không tính thuế ' + money(m.exempt) : ''}${m.source === 'estimate' ? ' · * ước tính (tháng tính lương trước khi có thuế TNCN)' : ''}${m.notWithheld ? ' · chưa trừ vào lương / thưởng, thu ở quyết toán tháng 12' : ''}${m.locked ? '' : ' · bảng lương chưa khoá'}${m.partial ? ' · chỉ phần ở bảng lương bạn được xem: ' + m.groups.join(' + ') : (m.groups || []).length > 1 ? ' · ' + m.groups.join(' + ') : ''}`;
+      return `<td class="n${m.locked ? '' : ' unl'}" title="${esc(tip)}">${m.tax === null ? '<span class="muted">chưa tính</span>' : k === 12 ? rpSettle(m.tax) : money(m.tax)}${m.source === 'estimate' ? '<sup>*</sup>' : ''}</td>`;
+    };
+    const A = (e, f) => e.annual ? money(e.annual[f]) : '<span class="muted">–</span>';
+    $('#ptb').innerHTML = !d.employees.length ? `<div class="muted">Năm ${year} chưa có bảng lương ${S.locked ? 'đã khoá ' : ''}nào của người hưởng lương theo hệ số${S.gid ? ' trong bảng lương này' : ''}.</div>` : `
+      <div class="scroll"><table class="rtb pittb"><thead><tr><th class="nm">Họ tên</th><th>Phòng</th>${MLAB.map((x, i) => `<th class="n" title="${i === 11 ? 'Tháng 12: quyết toán cả năm (âm = được hoàn)' : 'Thuế tạm tính tháng ' + (i + 1)}">${x}${i === 11 ? ' (QT)' : ''}</th>`).join('')}
+        <th class="n a">Tổng thu nhập chịu thuế</th><th class="n a">Tổng giảm trừ</th><th class="n a">Thu nhập tính thuế cả năm</th><th class="n a">Thuế cả năm</th><th class="n a">Đã tạm tính (T1–T11)</th><th class="n a">Tháng 12 quyết toán</th><th class="n a" title="Thuế cả năm − tổng thuế các tháng: + còn phải nộp, − được hoàn">Còn phải nộp / được hoàn</th></tr></thead><tbody>
+      ${list.map((e, i) => `<tr class="clk" data-i="${i}"><td class="nm"><b>${esc(e.name)}</b>${e.restricted ? ' <span class="muted" title="Có lương ở bảng lương bạn không được phân quyền xem: chỉ hiện phần của bảng lương được xem">◐</span>' : ''}${e.staleDecember ? ' <span class="badge adjusting" title="Số quyết toán ở bảng lương tháng 12 khác số tính lại hiện nay">tháng 12 cần tính lại</span>' : ''}</td><td class="muted" title="${esc(e.group || '')}">${esc(e.department || '')}</td>
+        ${MLAB.map((_, k) => cell(e, k + 1)).join('')}
+        <td class="n a">${A(e, 'taxable')}</td><td class="n a">${A(e, 'totalDeduction')}</td><td class="n a">${A(e, 'assessable')}</td><td class="n a"><b>${A(e, 'tax')}</b></td><td class="n a">${A(e, 'priorTax')}</td>
+        <td class="n a">${e.restricted ? '<span class="muted">–</span>' : e.settled ? rpSettle(e.months[12].tax) : '<span class="muted" title="Chưa có bảng lương tháng 12">chưa có</span>'}</td><td class="n a${e.settled ? '' : ' unl'}"${e.settled ? '' : ' title="Dự kiến: chưa có bảng lương tháng 12"'}>${rpOwe(e.remaining)}</td></tr>`).join('') || `<tr><td colspan="21" class="muted">Không có ai khớp "${esc(S.q)}".</td></tr>`}
+      <tr class="tot"><td class="nm">Cộng (${list.length} người)</td><td></td>${MLAB.map((_, k) => `<td class="n">${money(sum(e => e.months[k + 1]?.tax))}</td>`).join('')}
+        <td class="n">${money(sum(e => e.annual?.taxable))}</td><td class="n">${money(sum(e => e.annual?.totalDeduction))}</td><td class="n">${money(sum(e => e.annual?.assessable))}</td><td class="n">${money(sum(e => e.annual?.tax))}</td><td class="n">${money(sum(e => e.annual?.priorTax))}</td><td class="n">${money(sum(e => e.settled && !e.restricted ? e.months[12].tax : 0))}</td><td class="n">${rpOwe(sum(e => e.remaining))}</td></tr></tbody></table></div>
+      <div class="muted small" style="margin-top:6px">Rê chuột lên ô tháng để xem thu nhập chịu thuế, BH và số người phụ thuộc của tháng. <sup>*</sup> Ước tính: bảng lương tháng đó tính trước khi có chức năng thuế TNCN nên chưa lưu số thuế — bấm <b>Tính lại lương</b> ở tháng đó để lưu số chính thức (bảng đã khoá giữ nguyên, số ở đây chỉ để theo dõi). ${S.locked ? '' : 'Ô chữ nghiêng màu xám: bảng lương chưa khoá. '}<b>Còn phải nộp / được hoàn</b> = thuế cả năm − tổng thuế các tháng: bằng 0 khi tháng 12 đã quyết toán đúng; chưa có tháng 12 thì là số quyết toán dự kiến (chữ nghiêng; + phải nộp thêm, − được hoàn) — tính như năm chỉ có số tháng đã có lương (bậc thuế, giảm trừ quy theo số tháng), thu nhập đều thì gần bằng 0.</div>`;
+    $('#ptb').querySelectorAll('tr.clk').forEach(tr => tr.onclick = () => { const e = list[+tr.dataset.i];
+      modal(`<h2>Thuế TNCN năm ${year} — ${esc(e.name)}<span class="x">✕</span></h2><div class="muted small" style="margin:-4px 0 8px">${esc([e.code ? 'Mã NV ' + e.code : '', e.department, e.group].filter(Boolean).join(' · '))}</div>${rpPitStatement(e, sch, year)}`, true); });
+  };
+  paint();
+  const again = () => repPit(me, box).catch(x => safeErr(box, x));
+  $('#py').onchange = e => { S.year = +e.target.value; again(); }; $('#pg').onchange = e => { S.gid = e.target.value; again(); };
+  $('#plk').onchange = e => { S.locked = e.target.checked; again(); };
+  $('#pq').oninput = e => { S.q = e.target.value; paint(); };
+  $('#pxl').onclick = guard(() => download(`/api/reports/pit-year/export?year=${year}&locked=${S.locked ? 1 : 0}${S.gid ? '&groupId=' + S.gid : ''}`, `thue-tncn-nam-${year}.xlsx`));
+  if ($('#pded')) $('#pded').onclick = () => rpPitDeductions(me, d, again);
+}
+// Bảng kê thuế TNCN cả năm của 1 người, dễ đọc cho người lao động (dùng ở Thống kê năm và Lương của tôi)
+function rpPitStatement(e, sch, year) {
+  const a = e.annual, ks = Object.keys(e.months).map(Number).sort((x, y) => x - y), n = v => Number(v) || 0;
+  const t = { taxable: 0, exempt: 0, insurance: 0, tax: 0 }; ks.forEach(k => { for (const f in t) t[f] += n(e.months[k][f]); });
+  const note = m => [m.source === 'estimate' ? '* ước tính' : '', m.notWithheld ? 'chưa trừ vào lương / thưởng, thu ở quyết toán' : '', m.locked ? '' : 'bảng lương chưa khoá', m.partial ? 'chỉ phần ở ' + m.groups.join(' + ') : (m.groups || []).length > 1 ? 'gồm ' + m.groups.join(' + ') : ''].filter(Boolean).join(' · ');
+  const minus = v => v ? '−' + money(v) : '0';
+  const capTxt = (got, c) => `đã kê ${money(got)}${c === null || c === undefined ? '' : ` · tối đa ${rpCap(c)}/năm`}`;
+  const step = (label, v, hint, cls) => `<tr${cls ? ` class="${cls}"` : ''}><td>${label}</td><td class="n">${v}</td><td class="small muted">${hint || ''}</td></tr>`;
+  let h = `<h3 style="margin-top:4px">1. Thu nhập và thuế từng tháng</h3>
+    <div class="scroll"><table class="rtb"><thead><tr><th>Tháng</th><th class="n">Thu nhập chịu thuế</th><th class="n" title="Tiền làm đêm, làm thêm, làm lễ tết và tiền ăn ca">Không tính thuế</th><th class="n">BH bắt buộc được trừ</th><th class="n">Số người phụ thuộc</th><th class="n">Thuế TNCN</th><th>Ghi chú</th></tr></thead><tbody>
+    ${ks.map(k => { const m = e.months[k]; if (m.hidden) return `<tr><td><b>Tháng ${k}</b></td><td colspan="6" class="small muted">Lương ở bảng lương bạn không được phân quyền xem</td></tr>`; return `<tr${k === 12 ? ' style="background:#f8fbff"' : ''}><td><b>Tháng ${k}</b> <span class="muted small">${k === 12 ? 'quyết toán năm' : 'tạm tính'}</span></td><td class="n">${money(m.taxable)}</td><td class="n">${n(m.exempt) ? money(m.exempt) : '<span class="muted">0</span>'}</td><td class="n">${money(m.insurance)}</td><td class="n">${m.dependents}</td><td class="n"><b>${m.tax === null ? '<span class="muted">chưa tính</span>' : k === 12 ? rpSettle(m.tax) : money(m.tax)}</b></td><td class="small muted">${esc(note(m))}</td></tr>`; }).join('')}
+    <tr style="font-weight:700;background:#f3f4f6"><td>Cả năm</td><td class="n">${money(t.taxable)}</td><td class="n">${money(t.exempt)}</td><td class="n">${money(t.insurance)}</td><td></td><td class="n">${money(t.tax)}</td><td class="small">tổng thuế các tháng</td></tr></tbody></table></div>
+    <div class="muted small" style="margin-top:4px">Thu nhập chịu thuế = lương BH (gồm phụ cấp an toàn) + phụ cấp + thưởng. <b>Không tính thuế:</b> tiền làm đêm, làm thêm, làm lễ tết và toàn bộ tiền ăn ca. Tháng 1–11: thuế tạm tính theo tháng (mức trần từng bậc cả năm ÷ 12; giảm trừ bản thân, người phụ thuộc của tháng; y tế, giáo dục, khác = số cả năm ÷ 12).${ks.some(k => e.months[k].source === 'estimate') ? ' <b>*</b> Ước tính: tháng đó tính lương trước khi có chức năng thuế TNCN, số thuế được tính lại để theo dõi.' : ''}</div>`;
+  if (e.restricted) return h + `<div class="info" style="margin-top:8px">Người này có lương ở bảng lương bạn không được phân quyền xem: ở trên chỉ có số của bảng lương bạn được xem. Quyết toán cả năm gồm thu nhập ở mọi bảng lương nên chỉ người được xem đủ các bảng lương đó mới xem được.</div>`;
+  if (!a) return h + `<div class="err" style="margin-top:8px">Chưa có biểu thuế TNCN cho năm ${year} nên chưa tính được quyết toán.</div>`;
+  h += `<h3>2. Quyết toán thuế cả năm ${year}${a.projected ? ` <span class="muted small">(dự kiến theo ${a.months} tháng đã có lương)</span>` : ''}</h3><table class="pitsteps"><tbody>
+    ${step('<b>Tổng thu nhập chịu thuế cả năm</b>', `<b>${money(a.taxable)}</b>`, 'cộng cột "Thu nhập chịu thuế" ở trên')}
+    ${step('(−) Bảo hiểm bắt buộc', minus(a.insurance), 'BHXH, BHYT, BHTN người lao động đóng')}
+    ${step('(−) Giảm trừ bản thân', minus(a.self), `${a.selfMonths} tháng × ${money(sch.selfDeduction)}`)}
+    ${step('(−) Giảm trừ người phụ thuộc', minus(a.dependent), a.dependentMonths ? `${a.dependentMonths} tháng-người × ${money(a.dependentAmount)}` : 'không có người phụ thuộc trong năm')}
+    ${step('(−) Chi phí y tế', minus(a.extras.health), capTxt(e.extras.health, sch.healthCap))}
+    ${step('(−) Chi phí giáo dục', minus(a.extras.education), capTxt(e.extras.education, sch.educationCap))}
+    ${step('(−) Khoản giảm trừ khác', minus(a.extras.other), 'không giới hạn')}
+    ${step('<b>= Thu nhập tính thuế cả năm</b>', `<b>${money(a.assessable)}</b>`, `tổng giảm trừ ${money(a.totalDeduction)}${a.taxable < a.totalDeduction ? ' — lớn hơn thu nhập nên thu nhập tính thuế bằng 0' : ''}`, 'sum')}</tbody></table>
+    ${a.parts.length ? `<div class="scroll"><table class="rtb" style="margin-top:10px;width:auto"><thead><tr><th>Bậc</th><th>Phần thu nhập tính thuế cả năm</th><th class="n">Thuế suất</th><th class="n">Thu nhập trong bậc</th><th class="n">Thuế</th></tr></thead><tbody>
+      ${a.parts.map(p => `<tr><td>Bậc ${p.level}</td><td>${p.to === null ? `trên ${money(p.from)}` : `${money(p.from)} – ${money(p.to)}`}</td><td class="n">${p.rate}%</td><td class="n">${money(p.base)}</td><td class="n">${money(p.tax)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    <table class="pitsteps" style="margin-top:10px"><tbody>
+    ${step('<b>Thuế TNCN cả năm</b>', `<b>${money(a.tax)}</b>`, a.parts.length ? 'cộng cột Thuế của các bậc' : 'thu nhập tính thuế bằng 0 nên không có thuế')}
+    ${a.priorBasis === 'withheld' ? step('(−) Đã khấu trừ tháng 1–11', minus(a.priorTax), 'chỉ cộng các tháng đã trừ thuế vào lương / thưởng') : step('(−) Đã tạm tính tháng 1–11', minus(a.priorTax), 'cộng thuế tháng 1–11 ở trên')}
+    ${step(`<b>= ${a.projected ? 'Dự kiến' : 'Tháng 12 quyết toán'}: ${a.settle > 0 ? 'phải nộp thêm' : a.settle < 0 ? 'được hoàn' : 'không phải nộp thêm'}</b>`, `<b>${rpSettle(a.settle)}</b>`, 'thuế cả năm − đã tạm tính (âm = được hoàn)', 'sum')}</tbody></table>
+    ${e.staleDecember ? `<div class="warnbox" style="margin-top:8px">Bảng lương tháng 12 đã tính quyết toán <b>${rpSettle(e.months[12].tax)}</b>, khác số tính lại ở trên (đã đổi người phụ thuộc, giảm trừ hoặc lương tháng 1–11 sau khi tính tháng 12): chênh lệch ${rpOwe(e.remaining)} — tháng 12 cần tính lại lương.</div>`
+      : e.settled ? `<div class="info" style="margin-top:8px">Bảng lương tháng 12 đã quyết toán: <b>${rpSettle(e.months[12].tax)}</b>${e.months[12].source === 'estimate' ? ' (ước tính)' : ''}.${e.remaining ? ` Còn chênh lệch ${rpOwe(e.remaining)} so với thuế cả năm.` : ''}</div>`
+      : `<div class="info" style="margin-top:8px">Chưa có bảng lương tháng 12: số quyết toán ở trên là <b>dự kiến</b> theo ${ks.length} tháng đã có (${rpOwe(e.remaining)}).${ks.length < 12 ? ` Số dự kiến coi như năm chỉ có ${ks.length} tháng: mức trần bậc thuế và giảm trừ y tế / giáo dục / khác quy về ${ks.length}/12 năm, giảm trừ bản thân ${ks.length} tháng, nên thu nhập đều thì số này gần bằng 0. Số chính thức tính ở bảng lương tháng 12 (giảm trừ bản thân đủ 12 tháng, cộng thưởng cuối năm).` : ''}</div>`}
+    <h3>3. Người phụ thuộc</h3>${e.dependents.length ? `<div class="scroll"><table class="rtb" style="width:auto"><thead><tr><th>Họ tên</th><th>Tính giảm trừ từ</th><th>Đến</th><th class="n">Số tháng trong năm ${year}</th></tr></thead><tbody>${e.dependents.map((x, i) => `<tr><td>${x.name ? esc(x.name) : `<span class="muted" title="Họ tên người phụ thuộc chỉ Admin, Quản lý nhân sự, Quản lý hệ số của bảng lương này xem được">Người thứ ${i + 1}</span>`}</td><td>${rpYm(x.from)}</td><td>${x.to ? rpYm(x.to) : '<span class="muted">đang tính</span>'}</td><td class="n">${rpDepMonths(x, year)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="muted">Không có người phụ thuộc đăng ký giảm trừ.</div>'}
+    <h3>4. Giảm trừ theo năm ${year}</h3><table class="pitsteps"><tbody>
+    ${step('Chi phí y tế', money(e.extras.health), `được trừ ${money(a.extras.health)}${sch.healthCap === null ? '' : ` (tối đa ${rpCap(sch.healthCap)})`}`)}
+    ${step('Chi phí giáo dục', money(e.extras.education), `được trừ ${money(a.extras.education)}${sch.educationCap === null ? '' : ` (tối đa ${rpCap(sch.educationCap)})`}`)}
+    ${step('Khoản giảm trừ khác', money(e.extras.other), 'từ thiện, nhân đạo, hưu trí tự nguyện…')}${e.extras.note ? step('Ghi chú', '', esc(e.extras.note)) : ''}</tbody></table>
+    <div class="muted small" style="margin-top:6px">Theo Nghị định 253/2026/NĐ-CP (Điều 51), chi phí y tế, giáo dục được giảm trừ khi người lao động tự quyết toán thuế TNCN; số ở đây dùng để tạm tính và quyết toán dự kiến trên bảng lương. ${esc(rpSchTxt(sch))}</div>`;
+  return h;
+}
+// Nhập nhanh giảm trừ y tế / giáo dục / khác cả năm cho cả bảng lương (chỉ gửi những dòng đã sửa)
+function rpPitDeductions(me, d, done) {
+  const year = d.year, sch = d.schedule, all = rpTaxAll(me), K = ['health', 'education', 'other'], gs = d.groups.filter(g => rpTaxOn(me, g.id));
+  let gid = d.groupId && gs.some(g => g.id === d.groupId) ? d.groupId : (all ? '' : gs[0]?.id || ''), rows = [];
+  const pm = s => Number(String(s ?? '').replace(/[^\d]/g, '')) || 0;
+  const isChg = r => K.some(k => r.cur[k] !== r.orig[k]) || r.cur.note !== r.orig.note, changed = () => rows.filter(isChg);
+  const capOf = k => k === 'health' ? sch?.healthCap : k === 'education' ? sch?.educationCap : null;
+  const m = modal(`<h2>Giảm trừ chi phí y tế, giáo dục và khoản khác — năm ${year}<span class="x">✕</span></h2>
+    <div class="info small">${sch ? `${esc(rpSchTxt(sch))}<br>Nhập số <b>cả năm</b> của từng người. Tạm tính hằng tháng trừ số cả năm ÷ 12; quyết toán tháng 12 trừ đủ cả năm. Y tế, giáo dục chỉ được trừ tối đa theo mức của biểu thuế (ô vượt mức tô cam); khoản khác (từ thiện, nhân đạo, hưu trí tự nguyện…) không giới hạn.` : `Chưa có biểu thuế TNCN cho năm ${year}.`}</div>
+    <div class="warnbox small">Theo Nghị định 253/2026/NĐ-CP (Điều 51), giảm trừ chi phí y tế, giáo dục được thực hiện khi người lao động <b>tự quyết toán</b> thuế TNCN. Số nhập ở đây dùng để tạm tính và quyết toán dự kiến trên bảng lương.</div>
+    <div class="row"><select id="tdg">${all ? '<option value="">Tất cả bảng lương</option>' : ''}${gs.map(g => `<option value="${g.id}" ${g.id === gid ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select><input id="tdq" placeholder="Tìm tên…" style="width:150px">
+      <span class="grow small" id="tdn" style="color:#92400e"></span><button class="btn" id="tds">Lưu thay đổi</button></div>
+    <div id="tdb"></div>`, true);
+  const count = () => { const k = changed().length; $('#tdn', m).textContent = k ? `${k} người đã sửa, chưa lưu` : ''; };
+  const filter = () => { const q = rpNorm($('#tdq', m).value); m.querySelectorAll('#tdb tr[data-i]').forEach(tr => tr.style.display = !q || tr.dataset.s.includes(q) ? '' : 'none'); };
+  async function load() {
+    const b = $('#tdb', m); b.innerHTML = '<div class="center muted">Đang tải…</div>';
+    try { rows = (await GET(`/api/tax-deductions?year=${year}${gid ? '&groupId=' + gid : ''}`)).employees.map(e => { const v = { health: Number(e.health) || 0, education: Number(e.education) || 0, other: Number(e.other) || 0, note: e.note || '' }; return { e, orig: { ...v }, cur: { ...v } }; }); }
+    catch (x) { rows = []; b.innerHTML = `<div class="err">${esc(x.message)}</div>`; count(); return; }
+    const capH = k => capOf(k) === null || capOf(k) === undefined ? 'không giới hạn' : 'tối đa ' + rpCap(capOf(k));
+    b.innerHTML = rows.length ? `<div class="scroll" style="max-height:60vh"><table class="rtb tdtb"><thead><tr><th>Họ tên</th><th>Phòng</th>${gid ? '' : '<th>Bảng lương</th>'}<th class="n" title="Số người phụ thuộc có tính giảm trừ trong năm (nhập ở Nhân sự)">Người phụ thuộc</th>
+      <th class="n">Chi phí y tế<div class="small muted">${capH('health')}</div></th><th class="n">Chi phí giáo dục<div class="small muted">${capH('education')}</div></th><th class="n">Khoản khác<div class="small muted">không giới hạn</div></th><th>Ghi chú</th></tr></thead><tbody>
+      ${rows.map((r, i) => `<tr data-i="${i}" data-s="${esc(rpNorm(`${r.e.full_name} ${r.e.employee_code || ''} ${r.e.department_name || ''}`))}"><td><b>${esc(r.e.full_name)}</b></td><td class="muted">${esc(r.e.department_name || '')}</td>${gid ? '' : `<td class="muted">${esc(r.e.group_name || '')}</td>`}<td class="n">${r.e.dependents_in_year || '<span class="muted">0</span>'}</td>
+        ${K.map(k => `<td class="n"><input class="mny" data-k="${k}" inputmode="numeric" value="${r.cur[k] ? money(r.cur[k]) : ''}" placeholder="0"></td>`).join('')}<td><input data-k="note" value="${esc(r.cur.note)}" maxlength="500" style="width:200px"></td></tr>`).join('')}</tbody></table></div>
+      <div class="muted small" style="margin-top:6px">Gõ số tiền cả năm (vd 12000000); để trống = 0. Sau khi lưu, các bảng lương chưa khoá của năm ${year} có những người này được đánh dấu cần tính lại; bảng đã khoá giữ nguyên, báo cáo thuế năm tính lại quyết toán dự kiến ngay.</div>`
+      : `<div class="muted">Không có người hưởng lương theo hệ số nào${gid ? ' trong bảng lương này' : ''}.</div>`;
+    b.querySelectorAll('tr[data-i]').forEach(tr => { const r = rows[+tr.dataset.i];
+      tr.querySelectorAll('input').forEach(inp => { const k = inp.dataset.k;
+        const mark = () => { const c = capOf(k), over = c !== null && c !== undefined && r.cur[k] > Number(c); inp.classList.toggle('over', over); inp.title = over ? `Vượt mức tối đa — chỉ được trừ ${money(c)}` : ''; tr.classList.toggle('chg', isChg(r)); };
+        inp.oninput = () => { r.cur[k] = k === 'note' ? inp.value.trim() : pm(inp.value); mark(); count(); };
+        if (k !== 'note') inp.onblur = () => { inp.value = r.cur[k] ? money(r.cur[k]) : ''; };
+        mark(); }); });
+    filter(); count();
+  }
+  $('#tdq', m).oninput = filter;
+  $('#tdg', m).onchange = e => { if (changed().length) { toast('Có thay đổi chưa lưu — bấm "Lưu thay đổi" trước khi đổi bảng lương', true); e.target.value = gid; return; } gid = e.target.value; load(); };
+  $('#tds', m).onclick = guard(async () => {
+    const list = changed(); if (!list.length) { toast('Không có thay đổi nào'); return; }
+    const r = await POST('/api/tax-deductions/bulk', { year, rows: list.map(x => ({ employeeId: x.e.id, ...x.cur })) });
+    toast(`Đã lưu giảm trừ năm ${year} của ${r.saved} người`); m.close(); done();
+  });
+  load();
+}
+
+// ---------- 7. Tổng hợp tiền lương theo quỹ lương (HĐQT, Ban kiểm soát, văn phòng, vận hành, quản lý, sửa chữa…) ----------
+const RP_FUND = { year: 0, from: 1, to: 12, locked: true };
+const RP_FCOLS = [['headcount', 'Số người'], ['insurance_salary', 'Lương BH'], ['allowance', 'Phụ cấp'], ['bonus', 'Thưởng'], ['premium', 'Làm đêm / thêm / lễ'], ['fixed_amount', 'Lương khoán / thù lao'], ['gross', 'Tổng quỹ lương'], ['meal_amount', 'Ăn ca'], ['deduction', 'Khấu trừ'], ['pit_tax', 'Thuế TNCN'], ['net', 'Thực lĩnh']];
+const RP_RULE = { hdqt: 'người thuộc bộ phận HĐQT', bks: 'người thuộc Ban kiểm soát', office: 'bảng lương văn phòng (còn lại)', shift: 'nhà máy — người có kíp (công nhân vận hành)', plant: 'nhà máy — người không có kíp (quản lý và hành chính)' };
+async function repFunds(me, box) {
+  const S = RP_FUND, year = S.year || me.now.year, yrs = []; for (let y = me.yearMin; y <= me.yearMax; y++) yrs.push(y);
+  const q = `year=${year}&from=${S.from}&to=${S.to}&locked=${S.locked ? 1 : 0}`;
+  const d = await GET('/api/reports/funds?' + q), per = d.from === d.to ? `tháng ${d.from}/${year}` : `tháng ${d.from}–${d.to}/${year}`;
+  const mo = (id, v) => `<select id="${id}">${MLAB.map((_, i) => `<option value="${i + 1}" ${i + 1 === v ? 'selected' : ''}>Tháng ${i + 1}</option>`).join('')}</select>`;
+  const em = k => k === 'gross' || k === 'net' ? ' em' : '';
+  const tbl = (rows, total) => `<div class="scroll"><table class="rtb fundtb"><thead><tr><th>Quỹ lương</th>${RP_FCOLS.map(([k, t]) => `<th class="n${em(k)}">${t}</th>`).join('')}</tr></thead><tbody>
+    ${rows.map(x => `<tr><td><b>${esc(x.fundName)}</b></td>${RP_FCOLS.map(([k]) => `<td class="n${em(k)}">${k === 'headcount' ? x[k] : Number(x[k]) ? money(x[k]) : '<span class="muted">–</span>'}</td>`).join('')}</tr>`).join('')}
+    <tr class="tot"><td>Cộng</td>${RP_FCOLS.map(([k]) => `<td class="n${em(k)}">${k === 'headcount' ? total[k] : money(total[k])}</td>`).join('')}</tr></tbody></table></div>`;
+  box.innerHTML = `<div class="card"><div class="row"><h2 class="grow" style="margin:0">Tổng hợp tiền lương theo quỹ lương — ${per}</h2>
+      <select id="fy">${yrs.map(y => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select><label>Từ</label>${mo('ff', d.from)}<label>đến</label>${mo('ft', d.to)}
+      <label class="small"><input type="checkbox" id="flk" ${S.locked ? 'checked' : ''}> Chỉ tháng đã khoá</label><button class="btn sec" id="fxl">Xuất Excel</button></div>
+    <div class="muted small"><b>Xếp người vào quỹ</b> theo thứ tự ưu tiên: (1) quỹ chọn riêng cho người đó ở <b>Nhân sự</b>; (2) quỹ của bộ phận ở <b>Tổ chức</b>; (3) quy tắc tự xếp trong <b>Cấu hình › Quỹ lương</b>. Quỹ được ghi vào dòng lương lúc tính lương nên các tháng đã tính không đổi khi điều chuyển người sau này (bảng chưa khoá: bấm Tính lại lương để xếp lại).</div>
+    <div class="fundlist small">${d.funds.map(f => `<span><b>${esc(f.code)}</b> ${esc(f.name)} <span class="muted">— ${f.rule ? 'tự xếp: ' + RP_RULE[f.rule] : 'chỉ khi được chọn ở Nhân sự / Tổ chức'}${f.active ? '' : ' (ngừng dùng)'}</span></span>`).join('')}</div></div>
+    ${!d.groups.length ? `<div class="card muted">Không có dòng lương ${S.locked ? 'đã khoá ' : ''}nào trong ${per}.</div>` : `<div class="card"><h2 style="margin-top:0">Toàn công ty theo quỹ lương</h2>${tbl(d.byFund, d.total)}
+      <div class="muted small" style="margin-top:6px"><b>Tổng quỹ lương</b> = Lương BH + Phụ cấp + Thưởng + Làm đêm / thêm / lễ (người hưởng lương theo hệ số) hoặc số tiền khoán / thù lao; chưa gồm tiền ăn ca. <b>Thực lĩnh</b> = sau khấu trừ (và thuế nếu cài trừ thuế vào thưởng). <b>Số người</b> = số người khác nhau có dòng lương trong kỳ; người chuyển quỹ hoặc chuyển bảng lương được đếm ở mỗi nơi nên cộng các dòng có thể lớn hơn dòng Cộng.</div></div>
+    ${d.groups.map(g => `<div class="card"><h2 style="margin-top:0">${esc(g.name)} <span class="badge">${g.payType === 'fixed' ? 'lương khoán / thù lao' : g.kind === 'office' ? 'văn phòng' : 'nhà máy'}</span></h2>${tbl(g.rows, g.total)}</div>`).join('')}`}`;
+  const again = () => repFunds(me, box).catch(x => safeErr(box, x));
+  $('#fy').onchange = e => { S.year = +e.target.value; again(); };
+  $('#ff').onchange = e => { S.from = +e.target.value; if (S.to < S.from) S.to = S.from; again(); };
+  $('#ft').onchange = e => { S.to = +e.target.value; if (S.from > S.to) S.from = S.to; again(); };
+  $('#flk').onchange = e => { S.locked = e.target.checked; again(); };
+  $('#fxl').onclick = guard(() => download('/api/reports/funds/export?' + q, `quy-luong-${year}-t${d.from}-${d.to}.xlsx`));
+}
+
 // ---------- Lương của tôi (mọi nhân sự, chỉ của chính mình) ----------
 PAGES.mypay = async (me, root) => {
   const d = await GET('/api/reports/my');
@@ -233,8 +406,10 @@ PAGES.mypay = async (me, root) => {
       <div class="card"><h3 style="margin-top:0">Chi tiết năm ${sel}</h3><div class="scroll"><table><thead><tr><th>Tháng</th><th class="n">Ngày công</th><th class="n" title="Công tiêu chuẩn theo hợp đồng của tháng">Chuẩn</th><th class="n" title="Công thực tế trừ công tiêu chuẩn: + là làm vượt, − là chưa đủ">+ / −</th><th class="n" title="Công làm thêm ghi bằng ký hiệu LT">Làm thêm</th><th class="n">Lương</th><th class="n">Thưởng</th><th class="n">Ăn ca</th><th class="n">Phụ cấp</th><th class="n">Khấu trừ</th><th class="n">Tổng thực lĩnh</th><th></th></tr></thead><tbody>
       ${Y.months.map((m, i) => m ? `<tr class="clk" data-m="${i + 1}" style="cursor:pointer"><td><b>Tháng ${i + 1}</b></td><td class="n">${m.work_days}</td><td class="n">${m.std_days}</td><td class="n">${dfc(m.diff_days)}</td><td class="n">${m.ot_days || '·'}</td><td class="n">${money(m.salary)}</td><td class="n">${money(m.bonus)}</td><td class="n">${money(m.meal_amount)}</td><td class="n">${money(m.allowance)}</td><td class="n">${money(m.deduction)}</td><td class="n"><b>${money(m.net)}</b></td><td><button class="btn sec sm" data-xm="${i + 1}">Xuất Excel</button></td></tr>` : '').join('')}
       <tr style="font-weight:700;background:#f3f4f6"><td>Cả năm</td><td class="n">${Y.total.work_days}</td><td class="n">${Y.total.std_days}</td><td class="n">${dfc(Y.total.diff_days)}</td><td class="n">${Y.total.ot_days || '·'}</td><td class="n">${money(Y.total.salary)}</td><td class="n">${money(Y.total.bonus)}</td><td class="n">${money(Y.total.meal_amount)}</td><td class="n">${money(Y.total.allowance)}</td><td class="n">${money(Y.total.deduction)}</td><td class="n">${money(Y.total.net)} ${prev ? pctTxt(pct(Y.total.net, prev.total.net)) : ''}</td><td></td></tr></tbody></table></div>
-      <div class="muted small" style="margin-top:6px">Cột "Chuẩn" là công tiêu chuẩn theo hợp đồng của từng tháng; "+ / −" cho biết bạn làm vượt (+) hay chưa đủ (−) so với công tiêu chuẩn — công vượt phải được trả riêng bằng ký hiệu làm thêm (LT). Bấm vào một tháng để xem chi tiết; nút Xuất Excel từng tháng tải phiếu lương đủ hệ số và cách tính.${prev ? ` Mũi tên so với cả năm ${sel - 1} (nếu năm trước có ít tháng hơn thì chênh lệch chưa phản ánh đủ).` : ''}</div></div>`;
+      <div class="muted small" style="margin-top:6px">Cột "Chuẩn" là công tiêu chuẩn theo hợp đồng của từng tháng; "+ / −" cho biết bạn làm vượt (+) hay chưa đủ (−) so với công tiêu chuẩn — công vượt phải được trả riêng bằng ký hiệu làm thêm (LT). Bấm vào một tháng để xem chi tiết; nút Xuất Excel từng tháng tải phiếu lương đủ hệ số và cách tính.${prev ? ` Mũi tên so với cả năm ${sel - 1} (nếu năm trước có ít tháng hơn thì chênh lệch chưa phản ánh đủ).` : ''}</div></div>
+      <div class="card selfcard" id="mypit"><h3 style="margin-top:0">Thuế TNCN năm ${sel}</h3><div class="muted">Đang tải…</div></div>`;
     $('#my').onchange = e => { sel = +e.target.value; paint(); }; $('#mm').onchange = e => { metric = e.target.value; paint(); };
+    loadPit();
     $('#xy').onclick = guard(() => download(`/api/reports/my/export/file?year=${sel}`, `luong-ca-nhan-${sel}.xlsx`));
     root.querySelectorAll('[data-xm]').forEach(b => b.onclick = guard(e => { e.stopPropagation(); return download(`/api/reports/my/export/file?year=${sel}&month=${b.dataset.xm}`, `phieu-luong-${sel}-${String(b.dataset.xm).padStart(2, '0')}.xlsx`); }));
     root.querySelectorAll('tr.clk').forEach(tr => tr.onclick = guard(async () => {
@@ -248,6 +423,19 @@ PAGES.mypay = async (me, root) => {
         <div class="row" style="margin-top:10px"><button class="btn" id="xm">Xuất Excel phiếu lương tháng này</button></div>`);
       $('#xm').onclick = guard(() => download(`/api/reports/my/export/file?year=${sel}&month=${tr.dataset.m}`, `phieu-luong-${sel}-${String(tr.dataset.m).padStart(2, '0')}.xlsx`));
     }));
+  }
+  // Thuế TNCN cả năm của chính mình (chỉ tháng đã khoá): bảng tháng + cách quyết toán; tải 1 lần mỗi năm
+  const pitCache = {};
+  async function loadPit() {
+    const y = sel, el = $('#mypit'); if (!el) return;
+    try {
+      const r = await (pitCache[y] = pitCache[y] || GET(`/api/reports/my/pit?year=${y}`).catch(e => { delete pitCache[y]; throw e; }));
+      if (!el.isConnected) return;   // đã đổi năm / chỉ tiêu trong lúc tải
+      el.innerHTML = `<div class="row"><h3 class="grow" style="margin:0">Thuế TNCN năm ${y}</h3>${r.me ? `<button class="btn sec" id="xpit">Xuất Excel bảng kê thuế ${y}</button>` : ''}</div>
+        <div class="muted small" style="margin-bottom:6px">${esc(r.note)}</div>
+        ${r.me ? rpPitStatement(r.me, r.schedule, y) : `<div class="info">Chưa có tháng nào đã khoá được tính thuế TNCN năm ${y}. Người hưởng lương khoán / thù lao đã được khấu trừ thuế 10% ngay khi chi trả (xem ở phiếu lương từng tháng).</div>`}`;
+      if ($('#xpit')) $('#xpit').onclick = guard(() => download(`/api/reports/my/pit/export?year=${y}`, `thue-tncn-ca-nhan-${y}.xlsx`));
+    } catch (e) { if (el.isConnected) el.innerHTML = `<h3 style="margin-top:0">Thuế TNCN năm ${y}</h3><div class="err">${esc(e.message)}</div>`; }
   }
   paint();
 };

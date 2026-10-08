@@ -7,6 +7,8 @@ const { syncDirectory, normalizeShifts } = require('../sso');
 const { isEmpType } = require('../lib/emptypes');
 const { posTitle } = require('../lib/names');
 
+// Tháng hiện tại theo giờ Việt Nam (đếm người phụ thuộc đang được tính)
+const CUR_MONTH = `date_trunc('month', now() AT TIME ZONE 'Asia/Ho_Chi_Minh')::date`;
 // Quản lý nhân sự: Admin hoặc người có quyền "people" (toàn hệ thống)
 const needPeople = req => { if (!req.auth.isAdmin && !req.auth.can('people', {})) forbid('Chỉ Admin hoặc người được phân quyền "Quản lý nhân sự" mới thực hiện được'); };
 router.get('/employees', api(async req => {
@@ -24,7 +26,9 @@ router.get('/employees', api(async req => {
   const stT = Object.fromEntries((await rows("SELECT key, value FROM settings WHERE key IN ('plant_title_head','plant_title_deputy')")).map(r => [r.key, r.value]));
   const list = await rows(`SELECT v.id, v.sso_user_id, v.employee_code, v.full_name, v.email, v.positions, v.title, v.title_manual, v.group_kind, v.employee_type, v.weekly_off, v.allowance_group_id, v.shift_no, v.is_lead, v.type_locked, v.pos_rank, v.sso_status, v.payroll_active,
       v.sort_order, v.mapped_department_id, v.override_department_id, v.department_id, v.department_name, v.pay_department_name, v.pay_dept_id, v.sheet_name, v.group_name, v.sso_dept_ids,
-      v.pay_mode, v.fixed_amount, v.fixed_tax_pct, v.fixed_group_id, (v.sso_user_id LIKE 'manual:%') AS manual
+      v.pay_mode, v.fixed_amount, v.fixed_tax_pct, v.fixed_group_id, (v.sso_user_id LIKE 'manual:%') AS manual, v.fund_id,
+      (SELECT count(*)::int FROM employee_dependents d WHERE d.employee_id=v.id AND d.from_month <= ${CUR_MONTH} AND (d.to_month IS NULL OR d.to_month >= ${CUR_MONTH})) AS dependents_active,
+      (SELECT count(*)::int FROM employee_dependents d WHERE d.employee_id=v.id) AS dependents_total
     FROM v_employees v ${w.length ? 'WHERE ' + w.join(' AND ') : ''}
     ORDER BY v.group_name NULLS LAST, v.department_sort NULLS LAST, v.department_name NULLS LAST, v.emp_order, v.sort_order, v.full_name LIMIT 3000`, p);
   // auto_title: chức danh tự động (khi chưa sửa tay) để hiện gợi ý ở ô Chức danh
@@ -33,7 +37,7 @@ router.get('/employees', api(async req => {
 }));
 
 // ---- Dùng chung: dựng câu lệnh UPDATE từ các trường được phép; chụp ảnh trạng thái cũ để hoàn tác ----
-const SNAP_COLS = ['employee_code', 'employee_type', 'shift_no', 'is_lead', 'allowance_group_id', 'weekly_off', 'payroll_active', 'sort_order', 'override_department_id', 'type_locked', 'title_manual', 'pay_mode', 'fixed_amount', 'fixed_tax_pct', 'fixed_group_id'];
+const SNAP_COLS = ['employee_code', 'employee_type', 'shift_no', 'is_lead', 'allowance_group_id', 'weekly_off', 'payroll_active', 'sort_order', 'override_department_id', 'type_locked', 'title_manual', 'pay_mode', 'fixed_amount', 'fixed_tax_pct', 'fixed_group_id', 'fund_id'];
 function buildSets(b, p) {
   const sets = [], add = (col, v) => { p.push(v); sets.push(`${col}=$${p.length}`); };
   if ('employee_code' in b) add('employee_code', str(b.employee_code) || null);
@@ -51,10 +55,12 @@ function buildSets(b, p) {
   if ('fixed_amount' in b) { const n = Number(b.fixed_amount === '' || b.fixed_amount === null ? 0 : b.fixed_amount); if (!Number.isFinite(n) || n < 0 || n > 1e11) bad('Số tiền lương khoán không hợp lệ'); add('fixed_amount', Math.round(n)); }
   if ('fixed_tax_pct' in b) { const n = Number(b.fixed_tax_pct === '' || b.fixed_tax_pct === null ? 10 : b.fixed_tax_pct); if (!Number.isFinite(n) || n < 0 || n > 100) bad('Tỷ lệ thuế vãng lai phải từ 0 đến 100%'); add('fixed_tax_pct', n); }
   if ('fixed_group_id' in b) { if (b.fixed_group_id && !isUuid(b.fixed_group_id)) bad('Bảng lương khoán không hợp lệ'); add('fixed_group_id', b.fixed_group_id || null); }
+  // Quỹ lương chọn tay (trống = theo bộ phận / quy tắc tự xếp)
+  if ('fund_id' in b) { if (b.fund_id && !isUuid(b.fund_id)) bad('Quỹ lương không hợp lệ'); add('fund_id', b.fund_id || null); }
   // Họ tên chỉ sửa được với người ngoài SSO (người từ SSO lấy tên theo SSO)
   if ('full_name' in b) { const nm = String(b.full_name ?? '').replace(/\s+/g, ' ').trim().slice(0, 120); if (!nm) bad('Họ tên không được để trống'); p.push(nm); sets.push(`full_name=CASE WHEN sso_user_id LIKE 'manual:%' THEN $${p.length} ELSE full_name END`); }
   if ('employee_type' in b || 'weekly_off' in b) sets.push('type_locked=true');
-  return { sets, stale: ['weekly_off', 'allowance_group_id', 'employee_type', 'payroll_active', 'pay_mode', 'fixed_amount', 'fixed_tax_pct', 'fixed_group_id'].some(k => k in b) };
+  return { sets, stale: ['weekly_off', 'allowance_group_id', 'employee_type', 'payroll_active', 'pay_mode', 'fixed_amount', 'fixed_tax_pct', 'fixed_group_id', 'fund_id'].some(k => k in b) };
 }
 // Bảng lương khoán được chọn phải là bảng lương loại "Lương khoán"
 async function checkFixedGroups(list) {
@@ -185,6 +191,115 @@ router.post('/employees-undo', api(async req => {
   await require('../services/payroll').markStale(pool);
   await audit(req, 'employee.undo', 'employee', null, { snapshot: s.id, label: s.label, n: list.length });
   return { ok: true, restored: list.length, label: s.label };
+}));
+
+// ===== Thuế TNCN: người phụ thuộc và giảm trừ riêng theo năm (y tế, giáo dục, khác) =====
+// Xem / sửa: Admin, người "Quản lý nhân sự", hoặc người "Quản lý hệ số" của bảng lương có người đó. Dữ liệu cá nhân → không đưa vào settings / báo cáo chung.
+const pitSvc = require('../services/pit');
+const canTax = (req, e) => req.auth.isAdmin || req.auth.can('people', {}) || req.auth.can('hr', { groupId: e.group_id || e.fixed_group_id, sheetId: e.sheet_id });
+async function taxEmp(req, id) {
+  if (!isUuid(id)) bad('Mã không hợp lệ');
+  const e = await one('SELECT id, full_name, employee_code, pay_mode, group_id, sheet_id, fixed_group_id, pay_department_name, group_name FROM v_employees WHERE id=$1', [id]);
+  if (!e) bad('Không tìm thấy nhân sự', 404);
+  if (!canTax(req, e)) forbid('Chỉ Admin, người Quản lý nhân sự hoặc người Quản lý hệ số của bảng lương này mới xem / sửa được thông tin thuế TNCN');
+  return e;
+}
+const monthIn = (v, label, nullable) => { const x = str(v).slice(0, 7); if (!x && nullable) return null; if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(x) || x < '2000-01' || x > '2200-12') bad(`${label} không hợp lệ (chọn tháng/năm)`); return x + '-01'; };
+// Ngày có thật (vd không nhận 31/02), năm 1900 – nay
+const realDate = x => /^\d{4}-\d{2}-\d{2}$/.test(x) && !isNaN(Date.parse(x + 'T00:00:00Z')) && new Date(x + 'T00:00:00Z').toISOString().slice(0, 10) === x;
+const dateIn = v => { const x = str(v); if (!x) return null; if (!realDate(x) || x < '1900-01-01' || x > new Date().toISOString().slice(0, 10)) bad('Ngày sinh không hợp lệ'); return x; };
+const DEP_COLS = `id, employee_id, full_name, relationship, birth_date, id_number, tax_code, to_char(from_month,'YYYY-MM') AS from_month, to_char(to_month,'YYYY-MM') AS to_month, note, updated_at,
+  (from_month <= ${CUR_MONTH} AND (to_month IS NULL OR to_month >= ${CUR_MONTH})) AS active_now`;
+function depFields(b, partial) {
+  const f = {};
+  if (!partial || 'full_name' in b) { f.full_name = String(b.full_name ?? '').replace(/\s+/g, ' ').trim().slice(0, 120); if (!f.full_name) bad('Nhập họ tên người phụ thuộc'); }
+  for (const k of ['relationship', 'id_number', 'tax_code', 'note']) if (!partial || k in b) f[k] = str(b[k]).slice(0, k === 'note' ? 500 : 60) || null;
+  if (!partial || 'birth_date' in b) f.birth_date = dateIn(b.birth_date);
+  if (!partial || 'from_month' in b) f.from_month = monthIn(b.from_month, 'Tháng bắt đầu tính giảm trừ');
+  if (!partial || 'to_month' in b) f.to_month = monthIn(b.to_month, 'Tháng cuối được giảm trừ', true);
+  return f;
+}
+const minYear = (...ds) => Math.min(...ds.filter(Boolean).map(d => Number(String(d).slice(0, 4))));
+router.get('/employees/:id/dependents', api(async req => {
+  const e = await taxEmp(req, req.params.id);
+  return { employee: e, dependents: await rows(`SELECT ${DEP_COLS} FROM employee_dependents WHERE employee_id=$1 ORDER BY (to_month IS NULL) DESC, from_month, full_name`, [e.id]) };
+}));
+router.post('/employees/:id/dependents', api(async req => {
+  const e = await taxEmp(req, req.params.id), f = depFields(req.body || {}, false);
+  if (f.to_month && f.to_month < f.from_month) bad('Tháng cuối phải từ tháng bắt đầu trở đi');
+  const ks = Object.keys(f);
+  const r = await one(`INSERT INTO employee_dependents(employee_id, ${ks.join(',')}, updated_by) VALUES($1, ${ks.map((_, i) => '$' + (i + 2)).join(',')}, $${ks.length + 2}) RETURNING id`, [e.id, ...ks.map(k => f[k]), req.auth.user.id]);
+  await pitSvc.staleEmployee(pool, e.id, minYear(f.from_month));
+  await audit(req, 'dependent.add', 'employee', e.id, { id: r.id, full_name: f.full_name, relationship: f.relationship, from_month: f.from_month, to_month: f.to_month });
+  return one(`SELECT ${DEP_COLS} FROM employee_dependents WHERE id=$1`, [r.id]);
+}));
+router.patch('/dependents/:id', api(async req => {
+  if (!isUuid(req.params.id)) bad('Mã không hợp lệ');
+  const old = await one('SELECT * FROM employee_dependents WHERE id=$1', [req.params.id]); if (!old) bad('Không tìm thấy người phụ thuộc', 404);
+  const e = await taxEmp(req, old.employee_id), f = depFields(req.body || {}, true), ks = Object.keys(f);
+  if (!ks.length) bad('Không có gì để cập nhật');
+  const from = f.from_month || old.from_month, to = 'to_month' in f ? f.to_month : old.to_month;
+  if (to && String(to) < String(from)) bad('Tháng cuối phải từ tháng bắt đầu trở đi');
+  await pool.query(`UPDATE employee_dependents SET ${ks.map((k, i) => `${k}=$${i + 2}`).join(',')}, updated_by=$${ks.length + 2}, updated_at=now() WHERE id=$1`, [old.id, ...ks.map(k => f[k]), req.auth.user.id]);
+  await pitSvc.staleEmployee(pool, e.id, minYear(old.from_month, from, old.to_month, to));
+  await audit(req, 'dependent.update', 'employee', e.id, { id: old.id, ...f });
+  return one(`SELECT ${DEP_COLS} FROM employee_dependents WHERE id=$1`, [old.id]);
+}));
+router.delete('/dependents/:id', api(async req => {
+  if (!isUuid(req.params.id)) bad('Mã không hợp lệ');
+  const old = await one('SELECT * FROM employee_dependents WHERE id=$1', [req.params.id]); if (!old) bad('Không tìm thấy người phụ thuộc', 404);
+  const e = await taxEmp(req, old.employee_id);
+  await pool.query('DELETE FROM employee_dependents WHERE id=$1', [old.id]);
+  await pitSvc.staleEmployee(pool, e.id, minYear(old.from_month));
+  await audit(req, 'dependent.delete', 'employee', e.id, { id: old.id, full_name: old.full_name, from_month: old.from_month, to_month: old.to_month });
+  return { ok: true };
+}));
+const moneyIn = (v, label) => { const n = Number(v === '' || v === null || v === undefined ? 0 : v); if (!Number.isFinite(n) || n < 0 || n > 1e12) bad(`${label} phải là số tiền không âm`); return Math.round(n); };
+const yearIn = v => { const y = Number(v); if (!Number.isInteger(y) || y < 2000 || y > 2200) bad('Năm không hợp lệ'); return y; };
+router.get('/employees/:id/tax-deductions', api(async req => {
+  const e = await taxEmp(req, req.params.id);
+  return { employee: e, items: await rows('SELECT year, health, education, other, note, updated_at FROM employee_tax_deductions WHERE employee_id=$1 ORDER BY year DESC', [e.id]) };
+}));
+const taxValues = b => ({ health: moneyIn(b.health, 'Chi phí y tế'), education: moneyIn(b.education, 'Chi phí giáo dục'), other: moneyIn(b.other, 'Khoản giảm trừ khác'), note: str(b.note).slice(0, 500) || null });
+/** Lưu giảm trừ năm của 1 người (v đã kiểm tra bằng taxValues); trả về số cũ để ghi nhật ký. */
+async function saveTaxDeduction(c, req, e, year, v) {
+  const old = (await c.query('SELECT health, education, other, note FROM employee_tax_deductions WHERE employee_id=$1 AND year=$2', [e.id, year])).rows[0] || null;
+  if (!v.health && !v.education && !v.other && !v.note) await c.query('DELETE FROM employee_tax_deductions WHERE employee_id=$1 AND year=$2', [e.id, year]);
+  else await c.query(`INSERT INTO employee_tax_deductions(employee_id, year, health, education, other, note, updated_by, updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,now())
+    ON CONFLICT (employee_id, year) DO UPDATE SET health=EXCLUDED.health, education=EXCLUDED.education, other=EXCLUDED.other, note=EXCLUDED.note, updated_by=EXCLUDED.updated_by, updated_at=now()`, [e.id, year, v.health, v.education, v.other, v.note, req.auth.user.id]);
+  await pitSvc.staleEmployee(c, e.id, year, year);
+  return old && { health: Number(old.health), education: Number(old.education), other: Number(old.other), note: old.note };
+}
+router.put('/employees/:id/tax-deductions/:year', api(async req => {
+  const e = await taxEmp(req, req.params.id), year = yearIn(req.params.year), v = taxValues(req.body || {});
+  const old = await tx(c => saveTaxDeduction(c, req, e, year, v));
+  await audit(req, 'tax_deduction.save', 'employee', e.id, { year, ...v, old });
+  return { ok: true, year, ...v };
+}));
+// Bảng nhập nhanh giảm trừ theo năm cho cả bảng lương (người hưởng lương theo hệ số)
+router.get('/tax-deductions', api(async req => {
+  const year = yearIn(req.query.year), groupId = req.query.groupId;
+  if (groupId && !isUuid(groupId)) bad('Bảng lương không hợp lệ');
+  const all = req.auth.isAdmin || req.auth.can('people', {}) || req.auth.can('hr', {});
+  if (!all && !(groupId && req.auth.can('hr', { groupId }))) forbid('Chọn bảng lương bạn được phân quyền "Quản lý hệ số"');
+  const p = [year, `${year}-01-01`, `${year}-12-01`], w = [`v.sso_status='active'`, `v.pay_mode='coef'`, 'NOT v.excluded', 'v.department_id IS NOT NULL'];
+  if (groupId) { p.push(groupId); w.push(`v.group_id=$${p.length}`); }
+  const list = await rows(`SELECT v.id, v.full_name, v.employee_code, v.pay_department_name AS department_name, v.group_name, d.health, d.education, d.other, d.note,
+      (SELECT count(*)::int FROM employee_dependents x WHERE x.employee_id=v.id AND x.from_month <= $3::date AND (x.to_month IS NULL OR x.to_month >= $2::date)) AS dependents_in_year
+    FROM v_employees v LEFT JOIN employee_tax_deductions d ON d.employee_id=v.id AND d.year=$1
+    WHERE ${w.join(' AND ')} ORDER BY v.group_name NULLS LAST, v.pay_department_sort NULLS LAST, v.emp_order, v.sort_order, v.full_name`, p);
+  return { year, employees: list };
+}));
+// Kiểm tra quyền và số liệu của mọi dòng trước, rồi lưu tất cả trong một giao dịch (lỗi một dòng thì không lưu dòng nào)
+router.post('/tax-deductions/bulk', api(async req => {
+  const year = yearIn(req.body?.year), list = Array.isArray(req.body?.rows) && req.body.rows.length ? req.body.rows : bad('Không có dữ liệu');
+  if (list.length > 2000) bad('Quá nhiều dòng');
+  const items = [];
+  for (const r of list) { if (!r || typeof r !== 'object') bad('Dữ liệu không hợp lệ'); const e = await taxEmp(req, r.employeeId); items.push({ e, v: taxValues(r) }); }
+  if (new Set(items.map(x => x.e.id)).size !== items.length) bad('Một người xuất hiện hai lần');
+  const changes = await tx(async c => { const out = []; for (const { e, v } of items) out.push({ employeeId: e.id, name: e.full_name, old: await saveTaxDeduction(c, req, e, year, v), new: v }); return out; });
+  await audit(req, 'tax_deduction.bulk', 'employee', null, { year, saved: changes.length, changes });
+  return { ok: true, saved: changes.length };
 }));
 
 router.post('/sso/sync', api(async req => { req.auth.needAdmin(); const r = await syncDirectory(); await audit(req, 'sso.sync', 'sso', null, r); return { ok: true, ...r }; }));

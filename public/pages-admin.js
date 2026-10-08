@@ -12,6 +12,21 @@ PAGES.admin = async (me, root) => {
   catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 };
 const KIND = { plant: 'Nhà máy', office: 'Văn phòng' };
+// Quỹ lương tự xếp (giống src/services/funds.js): bộ phận liên kết HĐQT / Ban kiểm soát → bảng lương văn phòng → nhà máy: có kíp / không kíp
+const ADM_FUND_RULES = [['', 'Không tự xếp (chỉ nhận người / bộ phận được chọn)'], ['hdqt', 'Bộ phận HĐQT'], ['bks', 'Bộ phận Ban kiểm soát'], ['office', 'Bảng lương văn phòng (người còn lại)'], ['shift', 'Nhà máy: người có kíp (công nhân vận hành)'], ['plant', 'Nhà máy: người không có kíp (quản lý, hành chính)']];
+function admFundTools(o) {
+  const F = o.salaryFunds || [], name = id => F.find(f => f.id === id)?.name || '';
+  const byRule = r => F.find(f => f.active && f.rule === r)?.name || 'chưa xếp quỹ';
+  const kindOf = d => o.groups.find(g => g.id === o.sheets.find(s => s.id === d?.sheet_id)?.group_id)?.kind;
+  const ruleOf = (d, kind, shift) => { const ids = d?.sso_ids || []; return ids.includes('role:HDQT') ? 'hdqt' : ids.includes('role:BKS') ? 'bks' : kind === 'office' ? 'office' : shift === undefined ? null : shift ? 'shift' : 'plant'; };
+  // bộ phận chưa chọn quỹ: quỹ theo quy tắc (nhà máy tuỳ người có kíp hay không)
+  const deptAuto = d => { const r = ruleOf(d, kindOf(d)); return r ? byRule(r) : `có kíp → ${byRule('shift')}; không kíp → ${byRule('plant')}`; };
+  // người chưa chọn quỹ: quỹ của bộ phận tính lương → quy tắc
+  const personAuto = (e, shift) => { const d = o.departments.find(x => x.id === e.pay_dept_id); return d?.fund_id ? `${name(d.fund_id)} (theo bộ phận)` : byRule(ruleOf(d, kindOf(d) || e.group_kind, !!shift)); };
+  // danh sách chọn: quỹ đang dùng + quỹ đã ngừng nhưng đang được chọn
+  const options = cur => F.filter(f => f.active || f.id === cur).map(f => `<option value="${f.id}" ${f.id === cur ? 'selected' : ''}>${esc(f.name)}${f.active ? '' : ' (ngừng)'}</option>`).join('');
+  return { F, name, deptAuto, personAuto, options };
+}
 
 // ---------- Tổ chức ----------
 // Cấu trúc: Bảng lương ▸ Bảng chấm công ▸ Bộ phận (mỗi bộ phận thuộc đúng 1 bảng chấm công; mỗi bảng chấm công thuộc đúng 1 bảng lương)
@@ -33,10 +48,12 @@ async function admOrg(me, box, reload) {
   const ssoName = Object.fromEntries(o.ssoDepartments.map(s => [s.id, s.name]));
   const yn = [{ v: 'true', t: 'Đang dùng' }, { v: 'false', t: 'Ngừng' }];
   const MEAL = [['auto', 'Kiểu 1 — Tự động theo ký hiệu công'], ['actual', 'Kiểu 2 — Bảng chấm ăn ca riêng'], ['auto_wait', 'Kiểu 1 + 3 — Tự động + bảng chấm ăn chờ ca']];
+  const FT = admFundTools(o);
   const deptRow = d => `<tr><td>${esc(d.name)}${d.active ? '' : ' <span class="badge">ngừng</span>'}<div class="muted small">${esc(d.code)}</div></td><td>${d.sso_ids.map(i => `<span class="badge">${esc(ssoName[i] || i)}</span>`).join(' ') || '<span class="muted">chưa liên kết SSO</span>'}</td><td class="n">${d.employee_count}</td>
       <td><select data-mm="${d.id}" style="max-width:240px" title="Cách tính tiền ăn ca của bộ phận này">${MEAL.map(m => `<option value="${m[0]}" ${(d.meal_mode || 'auto') === m[0] ? 'selected' : ''}>${m[1]}</option>`).join('')}</select></td>
+      <td class="small" style="max-width:220px">${d.fund_id ? `<b>${esc(FT.name(d.fund_id) || '?')}</b>` : `<span class="muted">Tự xếp: ${esc(FT.deptAuto(d))}</span>`}</td>
       <td class="n" style="white-space:nowrap"><button class="btn sec sm" data-map="${d.id}">Liên kết SSO</button> <button class="btn sec sm" data-ed="${d.id}">Sửa</button> <button class="btn red sm" data-dd="${d.id}">Xoá</button></td></tr>`;
-  const deptTable = list => list.length ? `<table><thead><tr><th>Bộ phận</th><th>Phòng ban SSO đã liên kết</th><th class="n">Nhân sự</th><th>Kiểu tính ăn ca</th><th></th></tr></thead><tbody>${list.map(deptRow).join('')}</tbody></table>` : '<div class="muted small">Chưa có bộ phận nào.</div>';
+  const deptTable = list => list.length ? `<table><thead><tr><th>Bộ phận</th><th>Phòng ban SSO đã liên kết</th><th class="n">Nhân sự</th><th>Kiểu tính ăn ca</th><th title="Quỹ lương để tổng hợp lương theo khối (cài danh sách quỹ ở Cấu hình). Người được chọn quỹ riêng ở tab Nhân sự thì theo quỹ riêng đó">Quỹ lương</th><th></th></tr></thead><tbody>${list.map(deptRow).join('')}</tbody></table>` : '<div class="muted small">Chưa có bộ phận nào.</div>';
   const sheetBlock = s => `<div style="margin:10px 12px 12px"><div class="row" style="margin-bottom:4px"><b class="grow">Bảng chấm công: ${esc(s.name)}</b>${s.active ? '' : '<span class="badge">ngừng</span>'}
       <button class="btn sec sm" data-sd="${s.id}">Chọn bộ phận</button><button class="btn sec sm" data-es="${s.id}">Sửa</button><button class="btn red sm" data-ds="${s.id}">Xoá</button></div>${deptTable(o.departments.filter(d => d.sheet_id === s.id))}</div>`;
   const noGroupSheets = o.sheets.filter(s => !s.group_id), noSheetDepts = o.departments.filter(d => !d.sheet_id);
@@ -72,12 +89,13 @@ async function admOrg(me, box, reload) {
       <div class="field"><label>Thuộc bảng lương</label><select id="d_g"><option value="">(chưa gán)</option>${o.groups.filter(g => g.pay_type !== 'fixed').map(g => `<option value="${g.id}" ${g.id === curGroup ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Thuộc bảng chấm công (thuộc bảng lương đã chọn)</label><select id="d_s"></select></div>
       <div class="field"><label>Kiểu tính ăn ca</label><select id="d_m">${MEAL.map(m => `<option value="${m[0]}" ${(d?.meal_mode || 'auto') === m[0] ? 'selected' : ''}>${m[1]}</option>`).join('')}</select></div>
+      <div class="field"><label>Quỹ lương (tổng hợp lương theo khối) — người được chọn quỹ riêng ở tab Nhân sự thì theo quỹ riêng</label><select id="d_f"><option value="">Tự xếp theo quy tắc${d ? ` (hiện: ${esc(FT.deptAuto(d))})` : ''}</option>${FT.options(d?.fund_id || '')}</select></div>
       <div class="field"><label>Thứ tự</label><input id="d_o" type="number" value="${d?.sort_order ?? 100}"></div>
       <div class="field"><label>Trạng thái</label><select id="d_a">${yn.map(x => `<option value="${x.v}" ${String(d?.active ?? true) === x.v ? 'selected' : ''}>${x.t}</option>`).join('')}</select></div>
       <div class="row"><button class="btn" id="ok">Lưu</button><button class="btn sec" id="no">Huỷ</button></div>`);
     const fill = () => { const g = m.querySelector('#d_g').value; m.querySelector('#d_s').innerHTML = `<option value="">(chưa gán)</option>` + o.sheets.filter(s => g ? s.group_id === g : !s.group_id).map(s => `<option value="${s.id}" ${s.id === d?.sheet_id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); };
     fill(); m.querySelector('#d_g').onchange = fill; m.querySelector('#no').onclick = () => m.close();
-    m.querySelector('#ok').onclick = guard(async () => { const b = { code: m.querySelector('#d_code').value, name: m.querySelector('#d_name').value, sheet_id: m.querySelector('#d_s').value || null, sort_order: m.querySelector('#d_o').value, meal_mode: m.querySelector('#d_m').value, active: m.querySelector('#d_a').value }; d ? await PATCH('/api/org/departments/' + d.id, b) : await POST('/api/org/departments', b); m.close(); reload(); });
+    m.querySelector('#ok').onclick = guard(async () => { const b = { code: m.querySelector('#d_code').value, name: m.querySelector('#d_name').value, sheet_id: m.querySelector('#d_s').value || null, sort_order: m.querySelector('#d_o').value, meal_mode: m.querySelector('#d_m').value, fund_id: m.querySelector('#d_f').value || null, active: m.querySelector('#d_a').value }; d ? await PATCH('/api/org/departments/' + d.id, b) : await POST('/api/org/departments', b); m.close(); reload(); });
   };
   $('#addG').onclick = guard(() => formG()); $('#addS').onclick = guard(() => formS()); $('#addD').onclick = () => formD();
   box.querySelectorAll('[data-eg]').forEach(b => b.onclick = guard(() => formG(o.groups.find(x => x.id === b.dataset.eg))));
@@ -120,13 +138,14 @@ async function admOrg(me, box, reload) {
 // Phòng ban lấy hoàn toàn từ SSO (qua liên kết ở tab "Tổ chức"); tại đây chỉ hiển thị, chỉnh mã NV / loại / kíp / trưởng ca / có tính lương.
 async function admPeople(me, box, reload) {
   const [o, agr] = await Promise.all([GET('/api/org'), GET('/api/workdays/allowance-groups')]);
-  const AG = agr.groups.filter(g => g.active), FG = o.groups.filter(g => g.pay_type === 'fixed' && g.active);
+  const AG = agr.groups.filter(g => g.active), FG = o.groups.filter(g => g.pay_type === 'fixed' && g.active), FT = admFundTools(o);
+  const EMP = new Map();   // id -> nhân sự đang hiện (để tính gợi ý quỹ tự xếp, mở thuế TNCN)
   const MANUAL_KEY = 'Người ngoài SSO (thời vụ / thù lao)';
   const picked = new Set();
   const dirty = PEOPLE_DIRTY = new Map(); // id -> { field: giá trị mới }
   box.innerHTML = `<div class="card"><h2>Nhân sự theo phòng (lấy từ SSO)</h2>
     <div class="muted small">Người ở phòng nào được lấy tự động từ SSO (chỉ Trưởng phòng, Phó phòng, Nhân viên mới nằm trong phòng; người phụ trách/Giám đốc/Phó GĐ không tính vào phòng). Phó GĐ kiêm trưởng phòng: chấm công ở phòng, bảng lương ở Ban Giám đốc. Người chưa thuộc phòng nào được ẩn. Muốn đổi phòng → đổi bên SSO rồi bấm "Đồng bộ".<br>
-    <b>Cách xếp trên bảng in:</b> HĐQT → Ban kiểm soát → Ban giám đốc → các phòng/nhà máy; trong phòng người chức cao đứng trước. Nhà máy: mục "Bộ phận quản lý", "Bộ phận hành chính" rồi "Công nhân vận hành" theo từng <b>Kíp</b>, trưởng ca đứng đầu kíp. Kíp / Trưởng ca chỉ có với <b>Công nhân</b>; Quản lý và Hành chính không thuộc kíp nào. Loại <b>Hành chính</b> gán tay ở cột Loại, nút Tự nhận loại không đổi người đã là Hành chính.<br><b>Chức danh</b> (in trên bảng chấm công, bảng lương): để trống = tự động — tích Trưởng ca → "Trưởng ca"; có Kíp → "ĐHV"; Trưởng / Phó phòng ở nhà máy → tên cài ở Cấu hình (mặc định "Giám đốc NM" / "P. Giám đốc NM"); còn lại theo chức vụ SSO. Gõ vào ô để sửa tay; xoá trắng để về tự động.<br><b>Cách tính lương</b>: mặc định <b>Theo hệ số</b>. Chọn <b>Lương khoán</b> cho người nhận thù lao / lao động thời vụ: nhập số tiền mỗi tháng, tỷ lệ thuế vãng lai (mặc định 10%) và bảng lương khoán sẽ tính người đó. Người lương khoán không vào bảng lương theo hệ số; thực nhận = số tiền − thuế vãng lai. Bảng lương khoán tạo ở tab Tổ chức (+ Bảng lương, Loại tính lương = Lương khoán); có thể để tất cả vào một bảng hoặc chia nhiều bảng. Người không có tài khoản SSO: bấm <b>+ Người ngoài SSO</b>.</div>
+    <b>Cách xếp trên bảng in:</b> HĐQT → Ban kiểm soát → Ban giám đốc → các phòng/nhà máy; trong phòng người chức cao đứng trước. Nhà máy: mục "Bộ phận quản lý", "Bộ phận hành chính" rồi "Công nhân vận hành" theo từng <b>Kíp</b>, trưởng ca đứng đầu kíp. Kíp / Trưởng ca chỉ có với <b>Công nhân</b>; Quản lý và Hành chính không thuộc kíp nào. Loại <b>Hành chính</b> gán tay ở cột Loại, nút Tự nhận loại không đổi người đã là Hành chính.<br><b>Chức danh</b> (in trên bảng chấm công, bảng lương): để trống = tự động — tích Trưởng ca → "Trưởng ca"; có Kíp → "ĐHV"; Trưởng / Phó phòng ở nhà máy → tên cài ở Cấu hình (mặc định "Giám đốc NM" / "P. Giám đốc NM"); còn lại theo chức vụ SSO. Gõ vào ô để sửa tay; xoá trắng để về tự động.<br><b>Cách tính lương</b>: mặc định <b>Theo hệ số</b>. Chọn <b>Lương khoán</b> cho người nhận thù lao / lao động thời vụ: nhập số tiền mỗi tháng, tỷ lệ thuế vãng lai (mặc định 10%) và bảng lương khoán sẽ tính người đó. Người lương khoán không vào bảng lương theo hệ số; thực nhận = số tiền − thuế vãng lai. Bảng lương khoán tạo ở tab Tổ chức (+ Bảng lương, Loại tính lương = Lương khoán); có thể để tất cả vào một bảng hoặc chia nhiều bảng. Người không có tài khoản SSO: bấm <b>+ Người ngoài SSO</b>.<br><b>Người phụ thuộc</b> (thuế TNCN, chỉ người hưởng lương theo hệ số): số người đang được tính giảm trừ tháng này, trong ngoặc là tổng số đã khai; bấm vào số để khai người phụ thuộc và giảm trừ y tế, giáo dục, khác theo năm. <b>Quỹ lương</b>: để "Tự xếp" thì theo quỹ của bộ phận (tab Tổ chức) hoặc quy tắc (HĐQT, Ban kiểm soát, văn phòng, nhà máy có kíp / không kíp); chọn quỹ khác khi người này thuộc khối khác (vd Khối sửa chữa).</div>
     <div class="row" style="margin-top:8px"><input id="q" placeholder="Tìm tên / email / mã…"><select id="fg"><option value="">Tất cả bảng lương</option>${opts(o.groups, 'id', 'name')}</select><select id="fpm"><option value="">Mọi cách tính lương</option><option value="coef">Theo hệ số</option><option value="fixed">Lương khoán</option></select><button class="btn sm" id="go">Lọc</button>
     <button class="btn sec sm" id="addManual" title="Lao động thời vụ / người nhận thù lao không có tài khoản SSO: tạo tay, tính lương khoán">+ Người ngoài SSO</button>
     <button class="btn sec sm" id="autotype" title="Quản lý = toàn bộ khối văn phòng (HĐQT, Ban kiểm soát, Ban giám đốc, các phòng) + Giám đốc/Phó giám đốc/Trưởng-Phó phòng nhà máy; còn lại = Công nhân. Đồng thời bỏ lịch nghỉ riêng để theo quy tắc Quản lý / Công nhân ở tab Công chuẩn.">Tự nhận loại + lịch nghỉ</button></div>
@@ -139,11 +158,12 @@ async function admPeople(me, box, reload) {
       <label>Cách tính lương</label><select id="b_pm"><option value="">— giữ nguyên —</option><option value="coef">Theo hệ số</option><option value="fixed">Lương khoán</option></select>
       <label>Bảng lương khoán</label><select id="b_fg"><option value="">— giữ nguyên —</option>${FG.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>
       <label>Thuế vãng lai %</label><input id="b_tax" type="number" min="0" max="100" step="0.5" style="width:70px" placeholder="giữ">
+      <label>Quỹ lương</label><select id="b_fund"><option value="">— giữ nguyên —</option><option value="-">Tự xếp (theo bộ phận / quy tắc)</option>${FT.options('')}</select>
       <button class="btn sm" id="b_apply">Áp dụng cho người đã chọn</button></div>
       <div id="undobar" class="small" style="margin-top:8px"></div>
       <div id="savebar" class="pplsave" hidden></div><div id="pl"></div></div>`;
   const upd = () => { $('#bn').textContent = picked.size ? `Đã chọn ${picked.size} người` : 'Chưa chọn ai'; };
-  const FIELD = { type: 'employee_type', shift: 'shift_no', lead: 'is_lead', woff: 'weekly_off', ag: 'allowance_group_id', code: 'employee_code', active: 'payroll_active', title: 'title_manual', pm: 'pay_mode', famt: 'fixed_amount', ftax: 'fixed_tax_pct', fgrp: 'fixed_group_id', name: 'full_name' };
+  const FIELD = { type: 'employee_type', shift: 'shift_no', lead: 'is_lead', woff: 'weekly_off', ag: 'allowance_group_id', code: 'employee_code', active: 'payroll_active', title: 'title_manual', pm: 'pay_mode', famt: 'fixed_amount', ftax: 'fixed_tax_pct', fgrp: 'fixed_group_id', name: 'full_name', fund: 'fund_id' };
   const ctl = el => el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value;
   const setCtl = (el, v) => { if (el.type === 'checkbox') el.checked = v === '1'; else el.value = v; };
   const mark = el => { const d = ctl(el) !== el.dataset.o; el.classList.toggle('chg', d); const td = el.closest('td'); if (td) td.classList.toggle('chgtd', d); };
@@ -153,7 +173,9 @@ async function admPeople(me, box, reload) {
     box.querySelector('.fxwarn').hidden = !(fx && !g.value); };
   const syncType = tr => { const w = tr.querySelector('[data-f="type"]').value === 'worker'; tr.querySelectorAll('[data-f="shift"],[data-f="lead"]').forEach(x => { x.disabled = !w; }); syncTitle(tr); };
   // Gợi ý chức danh tự động theo trưởng ca / kíp đang chọn (chưa lưu cũng đổi ngay); kíp / trưởng ca chỉ tính với Công nhân
-  const syncTitle = tr => { const t = tr.querySelector('[data-f="title"]'); if (!t) return; const w = tr.querySelector('[data-f="type"]').value === 'worker', lead = w && tr.querySelector('[data-f="lead"]').checked, sh = w && tr.querySelector('[data-f="shift"]').value; t.placeholder = lead ? 'Trưởng ca' : sh ? 'ĐHV' : (t.dataset.sso || ''); };
+  const syncTitle = tr => { const t = tr.querySelector('[data-f="title"]'); if (!t) return; const w = tr.querySelector('[data-f="type"]').value === 'worker', lead = w && tr.querySelector('[data-f="lead"]').checked, sh = w && tr.querySelector('[data-f="shift"]').value; t.placeholder = lead ? 'Trưởng ca' : sh ? 'ĐHV' : (t.dataset.sso || ''); syncFund(tr); };
+  // Gợi ý quỹ tự xếp theo kíp đang chọn (nhà máy: có kíp → công nhân vận hành, không kíp → quản lý và hành chính)
+  const syncFund = tr => { const s = tr.querySelector('[data-f="fund"]'), a = tr.querySelector('[data-fauto]'), e = EMP.get(tr.dataset.id); if (!s || !a || !e) return; const w = tr.querySelector('[data-f="type"]').value === 'worker'; a.hidden = !!s.value; a.textContent = '→ ' + FT.personAuto(e, w && tr.querySelector('[data-f="shift"]').value); };
   const bar = () => {
     const sb = $('#savebar'); if (!sb) return;
     sb.hidden = !dirty.size; window.onbeforeunload = dirty.size ? () => 'Còn thay đổi chưa lưu' : null;
@@ -162,7 +184,7 @@ async function admPeople(me, box, reload) {
     $('#sv_no').onclick = () => { dirty.clear(); window.onbeforeunload = null; guard(load)(); };
     $('#sv_ok').onclick = guard(async () => {
       const conv = { type: v => ({ employee_type: v }), shift: v => ({ shift_no: v === '' ? null : Number(v) }), lead: v => ({ is_lead: v === '1' }), woff: v => ({ weekly_off: v }), ag: v => ({ allowance_group_id: v }), code: v => ({ employee_code: v }), active: v => ({ payroll_active: v === '1' }), title: v => ({ title_manual: v }),
-        pm: v => ({ pay_mode: v }), famt: v => ({ fixed_amount: v === '' ? 0 : Number(v) }), ftax: v => ({ fixed_tax_pct: v === '' ? 10 : Number(v) }), fgrp: v => ({ fixed_group_id: v || null }), name: v => ({ full_name: v }) };
+        pm: v => ({ pay_mode: v }), famt: v => ({ fixed_amount: v === '' ? 0 : Number(v) }), ftax: v => ({ fixed_tax_pct: v === '' ? 10 : Number(v) }), fgrp: v => ({ fixed_group_id: v || null }), name: v => ({ full_name: v }), fund: v => ({ fund_id: v || null }) };
       const changes = [...dirty].map(([id, ch]) => Object.assign({ id }, ...Object.entries(ch).map(([f, v]) => conv[f](v))));
       const r = await POST('/api/employees-batch', { changes });
       dirty.clear(); toast(`Đã lưu ${r.updated} người — nếu nhầm, bấm "Hoàn tác" ở phía trên`); await load();
@@ -175,7 +197,7 @@ async function admPeople(me, box, reload) {
     if (v === el.dataset.o) delete ch[f]; else ch[f] = v;
     // chuyển sang body gửi lên: chuyển kiểu cho đúng
     if (!Object.keys(ch).length) dirty.delete(id); else dirty.set(id, ch);
-    if (f === 'type') syncType(tr); else if (f === 'lead' || f === 'shift') syncTitle(tr); else if (f === 'pm') syncPay(tr, true); else if (f === 'fgrp') syncPay(tr);
+    if (f === 'type') syncType(tr); else if (f === 'lead' || f === 'shift') syncTitle(tr); else if (f === 'pm') syncPay(tr, true); else if (f === 'fgrp') syncPay(tr); else if (f === 'fund') syncFund(tr);
     tr.classList.toggle('rowdirty', dirty.has(id)); bar();
   };
   async function loadUndo() {
@@ -190,8 +212,8 @@ async function admPeople(me, box, reload) {
   async function load() {
     const p = new URLSearchParams(); if ($('#q').value) p.set('q', $('#q').value); if ($('#fg').value) p.set('groupId', $('#fg').value); if ($('#fpm').value) p.set('payMode', $('#fpm').value);
     const r = await GET('/api/employees?' + p);
-    const by = new Map();
-    for (const e of r.employees) { const k = e.manual ? MANUAL_KEY : `${e.group_name} › ${e.sheet_name} › ${e.department_name}`; (by.get(k) || by.set(k, []).get(k)).push(e); }
+    const by = new Map(); EMP.clear();
+    for (const e of r.employees) { EMP.set(e.id, e); const k = e.manual ? MANUAL_KEY : `${e.group_name} › ${e.sheet_name} › ${e.department_name}`; (by.get(k) || by.set(k, []).get(k)).push(e); }
     const fgName = id => o.groups.find(g => g.id === id)?.name || '';
     const paySel = e => `<select data-f="pm" style="width:135px"><option value="coef" ${e.pay_mode !== 'fixed' ? 'selected' : ''}>Theo hệ số</option><option value="fixed" ${e.pay_mode === 'fixed' ? 'selected' : ''}>Lương khoán</option></select>
       <div class="fxbox small" ${e.pay_mode === 'fixed' ? '' : 'hidden'} style="margin-top:4px;line-height:1.9"><label title="Số tiền mặc định mỗi tháng; tháng nào khác thì sửa ở màn Bảng lương">Số tiền/tháng <input data-f="famt" type="number" min="0" step="100000" style="width:110px;text-align:right" value="${Number(e.fixed_amount) || ''}"></label><br>
@@ -199,18 +221,23 @@ async function admPeople(me, box, reload) {
       <select data-f="fgrp" style="width:170px" title="Bảng lương khoán tính người này"><option value="">— chọn bảng lương khoán —</option>${FG.map(g => `<option value="${g.id}" ${e.fixed_group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}${e.fixed_group_id && !FG.some(g => g.id === e.fixed_group_id) ? `<option value="${e.fixed_group_id}" selected>${esc(fgName(e.fixed_group_id) || '(bảng đã ngừng)')}</option>` : ''}</select>
       <div class="fxwarn" style="color:#b91c1c" ${e.pay_mode === 'fixed' && !e.fixed_group_id ? '' : 'hidden'}>${FG.length ? 'Chưa chọn bảng lương khoán: người này chưa được tính lương ở đâu' : 'Chưa có bảng lương khoán — tạo ở tab Tổ chức'}</div></div>`;
     const shiftSel = e => `<select data-f="shift" style="width:84px" ${e.employee_type === 'worker' ? '' : 'disabled'}><option value="">—</option>${[1, 2, 3, 4, 5, 6].map(n => `<option value="${n}" ${e.shift_no === n ? 'selected' : ''}>Kíp ${n}</option>`).join('')}</select>`;
+    const fundSel = e => `<select data-f="fund" style="width:135px" title="Quỹ lương để tổng hợp lương theo khối. Tự xếp = theo quỹ của bộ phận (tab Tổ chức) hoặc quy tắc"><option value="">Tự xếp</option>${FT.options(e.fund_id || '')}</select><div class="muted small" data-fauto style="max-width:150px" ${e.fund_id ? 'hidden' : ''}>→ ${esc(FT.personAuto(e, e.employee_type === 'worker' && e.shift_no))}</div>`;
+    // Người phụ thuộc: số đang được tính tháng này (tổng đã khai trong ngoặc); lương khoán / thù lao đã khấu trừ thuế vãng lai nên không có
+    const depCell = e => e.pay_mode === 'fixed' ? '<span class="muted" title="Lương khoán / thù lao: đã khấu trừ thuế vãng lai, không tính thuế lũy tiến nên không khai người phụ thuộc">—</span>'
+      : `<button class="btn sec sm" data-dep="${e.id}" title="Người phụ thuộc đang được tính giảm trừ tháng này (trong ngoặc: tổng số đã khai). Bấm để khai người phụ thuộc, giảm trừ y tế / giáo dục / khác theo năm">${admDepTxt(e.dependents_active, e.dependents_total)}</button>`;
     $('#pl').innerHTML = `<div class="muted small" style="margin:6px 0">${r.employees.length} người · ${by.size} nhóm</div>` + [...by].map(([k, list]) => `<div class="deptgrp"><h3>${esc(k)} <span class="badge">${list.length}</span></h3>
-      <div class="scroll" style="max-height:none;border:0"><table><thead><tr><th style="width:30px"><input type="checkbox" data-all="${esc(k)}" title="Chọn cả nhóm"></th><th>Họ tên</th><th title="Để trống = chức danh tự động (chữ mờ trong ô); gõ để sửa tay">Chức danh</th><th>Loại</th><th>Kíp</th><th>Trưởng ca</th><th title="Trống = theo quy tắc ở tab Công chuẩn">Nghỉ hằng tuần</th><th title="Nhóm đối tượng hưởng % phụ cấp đêm / sửa chữa (cài ở Cấu hình › Ký hiệu công)">Nhóm phụ cấp</th><th title="Theo hệ số (mặc định) hoặc Lương khoán: số tiền cố định, khấu trừ thuế vãng lai">Cách tính lương</th><th>Mã NV</th><th>Tính lương</th></tr></thead><tbody>${list.map(e => `<tr data-id="${e.id}" data-g="${esc(k)}"><td><input type="checkbox" data-pick ${picked.has(e.id) ? 'checked' : ''}></td><td>${e.manual ? `<input data-f="name" style="width:170px;font-weight:bold" maxlength="120" value="${esc(e.full_name)}"><div class="muted small">ngoài SSO <button class="btn red sm" data-delman="${e.id}" title="Xoá người này (chỉ khi chưa có trong bảng lương nào)">Xoá</button></div>` : `<b>${esc(e.full_name)}</b><div class="muted small">${esc(e.email || '')}</div>`}</td><td class="small"><input data-f="title" style="width:150px" maxlength="60" value="${esc(e.title_manual || '')}" placeholder="${esc(e.auto_title || '')}" data-sso="${esc(e.sso_title || '')}" title="Để trống = tự động"><div class="muted small">SSO: ${esc(e.positions || '—')}</div>${e.pay_dept_id && e.pay_dept_id !== e.department_id ? `<div><span class="badge">Lương tính ở: ${esc(e.pay_department_name || '')}</span></div>` : ''}</td>
+      <div class="scroll" style="max-height:none;border:0"><table><thead><tr><th style="width:30px"><input type="checkbox" data-all="${esc(k)}" title="Chọn cả nhóm"></th><th>Họ tên</th><th title="Để trống = chức danh tự động (chữ mờ trong ô); gõ để sửa tay">Chức danh</th><th>Loại</th><th>Kíp</th><th>Trưởng ca</th><th title="Trống = theo quy tắc ở tab Công chuẩn">Nghỉ hằng tuần</th><th title="Nhóm đối tượng hưởng % phụ cấp đêm / sửa chữa (cài ở Cấu hình › Ký hiệu công)">Nhóm phụ cấp</th><th title="Theo hệ số (mặc định) hoặc Lương khoán: số tiền cố định, khấu trừ thuế vãng lai">Cách tính lương</th><th title="Thuế TNCN: số người phụ thuộc đang được giảm trừ tháng này (trong ngoặc: tổng đã khai). Bấm để xem / sửa">Người phụ thuộc</th><th title="Quỹ lương (khối) để tổng hợp tiền lương; trống = tự xếp theo bộ phận / quy tắc">Quỹ lương</th><th>Mã NV</th><th>Tính lương</th></tr></thead><tbody>${list.map(e => `<tr data-id="${e.id}" data-g="${esc(k)}"><td><input type="checkbox" data-pick ${picked.has(e.id) ? 'checked' : ''}></td><td>${e.manual ? `<input data-f="name" style="width:170px;font-weight:bold" maxlength="120" value="${esc(e.full_name)}"><div class="muted small">ngoài SSO <button class="btn red sm" data-delman="${e.id}" title="Xoá người này (chỉ khi chưa có trong bảng lương nào)">Xoá</button></div>` : `<b>${esc(e.full_name)}</b><div class="muted small">${esc(e.email || '')}</div>`}</td><td class="small"><input data-f="title" style="width:150px" maxlength="60" value="${esc(e.title_manual || '')}" placeholder="${esc(e.auto_title || '')}" data-sso="${esc(e.sso_title || '')}" title="Để trống = tự động"><div class="muted small">SSO: ${esc(e.positions || '—')}</div>${e.pay_dept_id && e.pay_dept_id !== e.department_id ? `<div><span class="badge">Lương tính ở: ${esc(e.pay_department_name || '')}</span></div>` : ''}</td>
       <td>${e.type_locked ? '<span title="Đã chỉnh tay — nút Tự nhận loại sẽ không ghi đè">🔒</span> ' : ''}<select data-f="type">${EMP_TYPE_OPTS.map(o => `<option value="${o.v}" ${e.employee_type === o.v ? 'selected' : ''}>${o.t}</option>`).join('')}</select></td>
       <td>${shiftSel(e)}</td><td><input type="checkbox" data-f="lead" ${e.is_lead ? 'checked' : ''} ${e.employee_type === 'worker' ? '' : 'disabled'}></td>
        <td><select data-f="woff" style="width:130px"><option value="">Theo quy tắc</option><option value="sun" ${e.weekly_off === 'sun' ? 'selected' : ''}>Nghỉ CN</option><option value="sat_sun" ${e.weekly_off === 'sat_sun' ? 'selected' : ''}>Nghỉ T7 + CN</option></select></td>
  <td><select data-f="ag" style="width:120px"><option value="">—</option>${AG.map(g => `<option value="${g.id}" ${e.allowance_group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></td>
-      <td>${paySel(e)}</td><td><input data-f="code" style="width:90px" value="${esc(e.employee_code || '')}"></td><td><input type="checkbox" data-f="active" ${e.payroll_active ? 'checked' : ''}></td></tr>`).join('')}</tbody></table></div></div>`).join('') || '<div class="muted">Không có nhân sự. Bấm "Đồng bộ từ SSO" ở tab Tổ chức.</div>';
+      <td>${paySel(e)}</td><td class="n">${depCell(e)}</td><td>${fundSel(e)}</td><td><input data-f="code" style="width:90px" value="${esc(e.employee_code || '')}"></td><td><input type="checkbox" data-f="active" ${e.payroll_active ? 'checked' : ''}></td></tr>`).join('')}</tbody></table></div></div>`).join('') || '<div class="muted">Không có nhân sự. Bấm "Đồng bộ từ SSO" ở tab Tổ chức.</div>';
     $('#pl').querySelectorAll('[data-pick]').forEach(cb => cb.onchange = () => { const id = cb.closest('tr').dataset.id; cb.checked ? picked.add(id) : picked.delete(id); upd(); });
     $('#pl').querySelectorAll('[data-all]').forEach(cb => cb.onchange = () => { $('#pl').querySelectorAll('tr[data-g]').forEach(tr => { if (tr.dataset.g !== cb.dataset.all) return; const x = tr.querySelector('[data-pick]'); x.checked = cb.checked; cb.checked ? picked.add(tr.dataset.id) : picked.delete(tr.dataset.id); }); upd(); });
     $('#pl').querySelectorAll('[data-f]').forEach(el => { el.dataset.o = ctl(el); el.onchange = () => stage(el); });
     // giữ lại các thay đổi chưa lưu khi lọc / tải lại
     for (const [id, ch] of dirty) { const tr = $('#pl').querySelector(`tr[data-id="${id}"]`); if (!tr) continue; for (const f of Object.keys(ch)) { const el = tr.querySelector(`[data-f="${f}"]`); if (el) { setCtl(el, ch[f]); mark(el); } } syncType(tr); syncPay(tr); }
+    $('#pl').querySelectorAll('[data-dep]').forEach(b => b.onclick = guard(() => admPitPerson(me, EMP.get(b.dataset.dep), (a, t) => { const e = EMP.get(b.dataset.dep), x = $('#pl').querySelector(`[data-dep="${b.dataset.dep}"]`); if (e) Object.assign(e, { dependents_active: a, dependents_total: t }); if (x) x.textContent = admDepTxt(a, t); })));
     $('#pl').querySelectorAll('[data-delman]').forEach(b => b.onclick = guard(async () => { const tr = b.closest('tr'); if (!await confirmBox(`Xoá người ngoài SSO "${tr.querySelector('[data-f="name"]').dataset.o}"?`)) return; await DEL('/api/employees-manual/' + b.dataset.delman); dirty.delete(tr.dataset.id); toast('Đã xoá'); await load(); }));
     bar(); loadUndo();
     upd();
@@ -233,7 +260,8 @@ async function admPeople(me, box, reload) {
     if ($('#b_pm').value) body.pay_mode = $('#b_pm').value;
     if ($('#b_fg').value) body.fixed_group_id = $('#b_fg').value;
     if ($('#b_tax').value !== '') body.fixed_tax_pct = Number($('#b_tax').value);
-    if (Object.keys(body).length === 1) throw new Error('Chọn ít nhất một thay đổi (Kíp / Loại / Nghỉ hằng tuần / Nhóm phụ cấp / Trưởng ca / Cách tính lương)');
+    if ($('#b_fund').value) body.fund_id = $('#b_fund').value === '-' ? '' : $('#b_fund').value;
+    if (Object.keys(body).length === 1) throw new Error('Chọn ít nhất một thay đổi (Kíp / Loại / Nghỉ hằng tuần / Nhóm phụ cấp / Trưởng ca / Cách tính lương / Quỹ lương)');
     const r = await PATCH('/api/employees-bulk', body); toast(`Đã áp dụng cho ${r.updated} người — nếu nhầm bấm "Hoàn tác"`); picked.clear(); await load();
   });
   $('#autotype').onclick = guard(async () => {
@@ -253,6 +281,115 @@ async function admPeople(me, box, reload) {
     m.querySelector('#at_ok').onclick = guard(async () => { const r = await POST('/api/employees-autotype', { overwrite: !!(ow && ow.checked) }); m.close(); toast(`Đã cập nhật ${r.updated} người (có thể Hoàn tác)${r.keptLocked ? `, giữ nguyên ${r.keptLocked} người đã chỉnh tay` : ''} — hiện có ${r.managers} Quản lý, ${r.admins} Hành chính, ${r.workers} Công nhân`); await load(); });
   });
   await load();
+}
+
+// ---------- Thuế TNCN: dùng chung cho Nhân sự và Cấu hình ----------
+const admDepTxt = (a, t) => `${Number(a) || 0}${Number(t) !== Number(a) ? ` (${Number(t) || 0})` : ''}`;
+const admYmTxt = v => v ? `${String(v).slice(5, 7)}/${String(v).slice(0, 4)}` : '';
+const admCurYm = me => `${me.now.year}-${String(me.now.month).padStart(2, '0')}`;
+// Biểu thuế dùng cho năm y: biểu của năm gần nhất ≤ y; chưa có thì biểu sớm nhất (như src/services/pit.js)
+const admPitSched = (list, y) => { const l = [...(list || [])].sort((a, b) => b.year - a.year); return l.find(s => s.year <= y) || l[l.length - 1] || null; };
+const admCapTxt = v => v === null || v === undefined || v === '' ? 'không giới hạn' : Number(v) === 0 ? 'không áp dụng' : 'tối đa ' + money(v);
+const admCapped = (a, cap) => { const x = Math.max(0, Number(a) || 0); return cap === null || cap === undefined || cap === '' ? x : Math.min(x, Math.max(0, Number(cap) || 0)); };
+const admPct = n => String(Math.round(Number(n) * 100) / 100).replace('.', ',');
+// Thuế lũy tiến từng phần (như src/lib/pit.js): divisor = 12 khi tạm tính tháng (mức trần bậc ÷ 12); bậc cuối không giới hạn
+function admPitProgressive(income, brackets, divisor = 1) {
+  const x = Math.max(0, Number(income) || 0), parts = []; let lower = 0, tax = 0;
+  brackets.forEach((b, i) => { const upper = i === brackets.length - 1 || !(Number(b.upto) > 0) ? Infinity : Number(b.upto) / divisor;
+    if (x > lower) { const base = Math.min(x, upper) - lower, t = base * (Number(b.rate) || 0) / 100; parts.push({ level: i + 1, rate: Number(b.rate) || 0, base, tax: t }); tax += t; }
+    lower = Math.max(lower, upper); });
+  return { tax: Math.round(tax), parts };
+}
+const ADM_REL_OPTS = ['Con', 'Vợ', 'Chồng', 'Cha đẻ', 'Mẹ đẻ', 'Cha vợ / cha chồng', 'Mẹ vợ / mẹ chồng', 'Anh / chị / em ruột', 'Ông / bà', 'Cháu ruột', 'Người khác đang trực tiếp nuôi dưỡng'];
+// Hộp "Thuế TNCN — <họ tên>": người phụ thuộc (tính theo tháng) + giảm trừ y tế / giáo dục / khác theo năm. onCount(đang tính, tổng) để cập nhật số ở danh sách.
+async function admPitPerson(me, e, onCount) {
+  if (!e) return;
+  const m = modal(`<h2>Thuế TNCN — ${esc(e.full_name)}<span class="x">✕</span></h2><div id="tx_b"><div class="muted">Đang tải…</div></div>`, true);
+  const cfg = await GET('/api/config').catch(() => ({ pitSchedules: [] })), S = cfg.pitSchedules || [], cur = admCurYm(me), sNow = admPitSched(S, me.now.year);
+  const years = []; for (let y = me.yearMin; y <= me.yearMax; y++) years.push(y);
+  const capInfo = s => s ? `Biểu ${s.year}: y tế ${admCapTxt(s.health_cap)}, giáo dục ${admCapTxt(s.education_cap)} / năm` : 'Chưa có biểu thuế (Cấu hình › Thuế TNCN)';
+  const stTxt = x => x.active_now ? '<span class="badge locked">Đang tính</span>' : x.from_month > cur ? `<span class="badge draft">Từ ${admYmTxt(x.from_month)}</span>` : '<span class="badge">Đã thôi</span>';
+  async function draw() {
+    const [d, t] = await Promise.all([GET(`/api/employees/${e.id}/dependents`), GET(`/api/employees/${e.id}/tax-deductions`)]);
+    const deps = d.dependents, items = t.items, have = new Set(items.map(i => Number(i.year)));
+    onCount(deps.filter(x => x.active_now).length, deps.length);
+    const free = years.filter(y => !have.has(y)), ny = free.includes(me.now.year) ? me.now.year : free.find(y => y > me.now.year) ?? free[free.length - 1];
+    const yrRow = (it, isNew) => `<tr data-yr="${it.year}" ${isNew ? 'data-new="1"' : ''}><td style="min-width:150px;max-width:210px">${isNew ? `<select data-ny>${free.map(y => `<option ${y === ny ? 'selected' : ''}>${y}</option>`).join('')}</select>` : `<b>${it.year}</b>`}<div class="muted small" data-cap>${esc(capInfo(admPitSched(S, it.year)))}</div></td>
+      ${['health', 'education', 'other'].map(k => `<td class="n"><input type="number" min="0" step="100000" data-k="${k}" style="width:118px;text-align:right" value="${Number(it[k]) || ''}" placeholder="0"></td>`).join('')}
+      <td><input data-k="note" maxlength="500" style="width:100%;min-width:110px" value="${esc(it.note || '')}"></td><td class="small" data-eff style="min-width:150px"></td>
+      <td style="white-space:nowrap">${isNew ? '<button class="btn sm" data-ysave>Thêm</button>' : '<button class="btn sm" data-ysave>Lưu</button> <button class="btn red sm" data-ydel>Xoá</button>'}</td></tr>`;
+    m.querySelector('#tx_b').innerHTML = `<div class="muted small" style="margin-bottom:8px">${esc(e.pay_department_name || e.department_name || '')}${e.group_name ? ' · ' + esc(e.group_name) : ''}${sNow ? ` · Biểu thuế năm ${me.now.year} (biểu ${sNow.year}): giảm trừ bản thân <b>${money(sNow.self_deduction)}</b>, mỗi người phụ thuộc <b>${money(sNow.dependent_deduction)}</b> / tháng` : ''}</div>
+      <div class="row" style="margin:0 0 4px"><h3 class="grow" style="margin:0">Người phụ thuộc</h3><button class="btn sm" id="tx_add">+ Thêm người phụ thuộc</button></div>
+      <div class="muted small" style="margin-bottom:6px">Mỗi người phụ thuộc được giảm trừ từ <b>tháng bắt đầu</b> đến <b>hết tháng cuối</b> (trống = vẫn đang tính). Khi người đó thôi là người phụ thuộc (con đã đi làm, đã chuyển cho người khác nhận giảm trừ…) bấm <b>Thôi tính</b> và chọn tháng cuối cùng còn được tính — không xoá, để các tháng trước vẫn đúng. Chỉ xoá khi khai nhầm. Đổi xong, các bảng lương chưa khoá có người này được đánh dấu cần Tính lại.</div>
+      <div class="scroll" style="max-height:none"><table><thead><tr><th>Họ tên</th><th>Quan hệ</th><th>Ngày sinh</th><th>CCCD / Mã số thuế</th><th>Tính từ tháng</th><th>Đến hết tháng</th><th>Trạng thái</th><th>Ghi chú</th><th></th></tr></thead><tbody>${deps.map(x => `<tr><td><b>${esc(x.full_name)}</b></td><td>${esc(x.relationship || '')}</td><td style="white-space:nowrap">${fmtDate(x.birth_date)}</td>
+        <td class="small">${[x.id_number ? 'CCCD: ' + esc(x.id_number) : '', x.tax_code ? 'MST: ' + esc(x.tax_code) : ''].filter(Boolean).join('<br>') || '<span class="muted">—</span>'}</td><td>${admYmTxt(x.from_month)}</td><td>${x.to_month ? admYmTxt(x.to_month) : '<span class="muted">đang tính</span>'}</td><td>${stTxt(x)}</td><td class="small">${esc(x.note || '')}</td>
+        <td style="white-space:nowrap"><button class="btn sec sm" data-dedit="${x.id}">Sửa</button> ${!x.to_month || x.to_month >= cur ? `<button class="btn sec sm" data-dstop="${x.id}">Thôi tính</button> ` : ''}<button class="btn red sm" data-ddel="${x.id}">Xoá</button></td></tr>`).join('') || '<tr><td colspan="9" class="muted">Chưa khai người phụ thuộc nào.</td></tr>'}</tbody></table></div>
+      <h3 style="margin:16px 0 4px">Giảm trừ theo năm (y tế, giáo dục, khác)</h3>
+      <div class="muted small" style="margin-bottom:6px">Nhập số <b>cả năm</b>. Tạm tính mỗi tháng trừ 1/12; tháng 12 quyết toán trừ đủ số cả năm. Chi phí y tế, giáo dục được trừ tối đa theo biểu thuế của năm (Cấu hình › Thuế TNCN); khoản khác (từ thiện, nhân đạo, khuyến học, quỹ hưu trí tự nguyện…) không giới hạn. Xoá trắng cả ba khoản và ghi chú rồi Lưu = xoá dòng.
+        <br>Lưu ý: theo Nghị định 253/2026/NĐ-CP (Điều 51), giảm trừ chi phí y tế, giáo dục do người lao động tự kê khai khi <b>tự quyết toán</b> thuế TNCN; số nhập ở đây chỉ để công ty tạm tính, quyết toán chính thức có thể khác.</div>
+      <div class="scroll" style="max-height:none"><table><thead><tr><th>Năm</th><th class="n">Chi phí y tế (cả năm)</th><th class="n">Chi phí giáo dục (cả năm)</th><th class="n">Giảm trừ khác (cả năm)</th><th>Ghi chú</th><th>Được trừ (sau mức tối đa)</th><th></th></tr></thead>
+        <tbody>${items.map(it => yrRow(it, false)).join('')}${free.length ? yrRow({ year: ny }, true) : ''}</tbody></table></div>
+      <div class="row" style="margin-top:12px"><span class="grow"></span><button class="btn sec" id="tx_close">Đóng</button></div>`;
+    const B = m.querySelector('#tx_b');
+    // Số được trừ sau mức tối đa của biểu năm đó; mỗi tháng = từng khoản ÷ 12 (làm tròn như khi tính lương)
+    const eff = tr => {
+      const y = Number(tr.querySelector('[data-ny]')?.value || tr.dataset.yr), s = admPitSched(S, y), v = k => Number(tr.querySelector(`[data-k="${k}"]`).value) || 0;
+      const h = admCapped(v('health'), s?.health_cap), ed = admCapped(v('education'), s?.education_cap), ot = Math.max(0, v('other')), tot = h + ed + ot;
+      const warn = (k, a, cap, lb) => v(k) > a ? `<div style="color:#b45309">${lb}: ${Number(cap) === 0 ? 'biểu năm này không áp dụng, không được trừ' : 'vượt mức tối đa, chỉ trừ ' + money(a)}</div>` : '';
+      tr.querySelector('[data-cap]').textContent = capInfo(s);
+      tr.querySelector('[data-eff]').innerHTML = (tot ? `Cả năm <b>${money(tot)}</b><br>Mỗi tháng ≈ ${money(Math.round(h / 12) + Math.round(ed / 12) + Math.round(ot / 12))}` : '<span class="muted">—</span>') + warn('health', h, s?.health_cap, 'Y tế') + warn('education', ed, s?.education_cap, 'Giáo dục');
+    };
+    B.querySelectorAll('tr[data-yr]').forEach(tr => { eff(tr); tr.querySelectorAll('input,select').forEach(i => i.oninput = i.onchange = () => eff(tr)); });
+    B.querySelector('#tx_close').onclick = () => m.close();
+    B.querySelectorAll('[data-ysave]').forEach(b => b.onclick = guard(async () => {
+      const tr = b.closest('tr'), y = Number(tr.querySelector('[data-ny]')?.value || tr.dataset.yr), v = k => tr.querySelector(`[data-k="${k}"]`).value;
+      await PUT(`/api/employees/${e.id}/tax-deductions/${y}`, { health: Number(v('health')) || 0, education: Number(v('education')) || 0, other: Number(v('other')) || 0, note: v('note') });
+      toast(`Đã lưu giảm trừ năm ${y} — các bảng lương chưa khoá năm ${y} có người này cần Tính lại`); await draw();
+    }));
+    B.querySelectorAll('[data-ydel]').forEach(b => b.onclick = guard(async () => {
+      const y = b.closest('tr').dataset.yr; if (!await confirmBox(`Xoá giảm trừ y tế / giáo dục / khác năm ${y} của ${e.full_name}?`)) return;
+      await PUT(`/api/employees/${e.id}/tax-deductions/${y}`, { health: 0, education: 0, other: 0, note: '' }); toast('Đã xoá'); await draw();
+    }));
+    const byId = id => deps.find(x => x.id === id);
+    B.querySelector('#tx_add').onclick = () => depForm(null);
+    B.querySelectorAll('[data-dedit]').forEach(b => b.onclick = () => depForm(byId(b.dataset.dedit)));
+    B.querySelectorAll('[data-dstop]').forEach(b => b.onclick = guard(async () => {
+      const x = byId(b.dataset.dstop), r = await ask(`Thôi tính giảm trừ — ${x.full_name}`, [{ label: `Tháng cuối cùng còn được giảm trừ (từ tháng sau không tính nữa). Đang tính từ ${admYmTxt(x.from_month)}.`, type: 'month', value: x.to_month || (cur < x.from_month ? x.from_month : cur) }], 'Thôi tính');
+      if (!r) return; if (!/^\d{4}-\d{2}$/.test(r[0])) throw new Error('Chọn tháng / năm cuối cùng còn được tính');
+      if (r[0] < x.from_month) throw new Error(`Tháng cuối phải từ ${admYmTxt(x.from_month)} trở đi (nếu khai nhầm thì bấm Xoá)`);
+      await PATCH('/api/dependents/' + x.id, { to_month: r[0] }); toast(`Đã thôi tính ${x.full_name} từ sau tháng ${admYmTxt(r[0])}`); await draw();
+    }));
+    B.querySelectorAll('[data-ddel]').forEach(b => b.onclick = guard(async () => {
+      const x = byId(b.dataset.ddel); if (!await confirmBox(`Xoá hẳn người phụ thuộc "${x.full_name}"? Chỉ dùng khi khai nhầm — các tháng đã tính sẽ mất giảm trừ khi bấm Tính lại. Người thôi là người phụ thuộc thì dùng "Thôi tính".`)) return;
+      await DEL('/api/dependents/' + x.id); toast('Đã xoá'); await draw();
+    }));
+  }
+  // Thêm / sửa người phụ thuộc (tháng dạng YYYY-MM)
+  function depForm(x) {
+    const f = modal(`<h2>${x ? 'Sửa người phụ thuộc' : 'Thêm người phụ thuộc'} — ${esc(e.full_name)}<span class="x">✕</span></h2>
+      <div class="fgrid"><div class="field"><label>Họ và tên người phụ thuộc *</label><input id="p_n" maxlength="120" value="${esc(x?.full_name || '')}"></div>
+      <div class="field"><label>Quan hệ với người nộp thuế</label><input id="p_r" list="p_rl" maxlength="60" value="${esc(x?.relationship || '')}" placeholder="vd Con, Mẹ đẻ…"><datalist id="p_rl">${ADM_REL_OPTS.map(r => `<option value="${esc(r)}">`).join('')}</datalist></div>
+      <div class="field"><label>Ngày sinh</label><input id="p_b" type="date" value="${esc(ymd(x?.birth_date))}"></div>
+      <div class="field"><label>Số CCCD / định danh cá nhân</label><input id="p_i" maxlength="60" value="${esc(x?.id_number || '')}"></div>
+      <div class="field"><label>Mã số thuế người phụ thuộc</label><input id="p_t" maxlength="60" value="${esc(x?.tax_code || '')}"></div>
+      <div class="field"><label>Tính giảm trừ từ tháng *</label><input id="p_f" type="month" placeholder="YYYY-MM" value="${esc(x?.from_month || cur)}"></div>
+      <div class="field"><label>Đến hết tháng (trống = đang tính)</label><input id="p_to" type="month" placeholder="YYYY-MM" value="${esc(x?.to_month || '')}"></div></div>
+      <div class="field"><label>Ghi chú</label><input id="p_note" maxlength="500" value="${esc(x?.note || '')}"></div>
+      <div class="muted small" style="margin-bottom:10px">Được giảm trừ từ tháng phát sinh nghĩa vụ nuôi dưỡng (vd tháng sinh con). Mỗi người phụ thuộc chỉ được tính cho một người nộp thuế.</div>
+      <div class="row"><button class="btn" id="p_ok">Lưu</button><button class="btn sec" id="p_no">Huỷ</button></div>`);
+    const v = id => f.querySelector(id).value.trim();
+    f.querySelector('#p_no').onclick = () => f.close();
+    f.querySelector('#p_ok').onclick = guard(async () => {
+      if (!v('#p_n')) throw new Error('Nhập họ tên người phụ thuộc');
+      if (!/^\d{4}-\d{2}$/.test(v('#p_f'))) throw new Error('Chọn tháng bắt đầu tính giảm trừ');
+      if (v('#p_to') && v('#p_to') < v('#p_f')) throw new Error('"Đến hết tháng" phải từ tháng bắt đầu trở đi');
+      const b = { full_name: v('#p_n'), relationship: v('#p_r'), birth_date: v('#p_b'), id_number: v('#p_i'), tax_code: v('#p_t'), from_month: v('#p_f'), to_month: v('#p_to'), note: v('#p_note') };
+      x ? await PATCH('/api/dependents/' + x.id, b) : await POST(`/api/employees/${e.id}/dependents`, b);
+      f.close(); toast(x ? 'Đã lưu' : 'Đã thêm người phụ thuộc'); await draw();
+    });
+    f.querySelector('#p_n').focus();
+  }
+  try { await draw(); } catch (err) { m.querySelector('#tx_b').innerHTML = `<div class="err">${esc(err.message)}</div>`; }
 }
 
 // ---------- Phân quyền ----------
@@ -342,6 +479,26 @@ async function admCfg(me, box, reload) {
     <div class="row"><label>Ở nhà máy, "Trưởng phòng" in là</label><input id="s_th" style="width:190px" value="${esc(s.plant_title_head ?? 'Giám đốc NM')}"><label>"Phó phòng" in là</label><input id="s_td" style="width:190px" value="${esc(s.plant_title_deputy ?? 'P. Giám đốc NM')}"><span class="muted small">Chỉ áp dụng cho bảng lương loại Nhà máy; để trống = giữ nguyên chức danh SSO.</span></div>
     <div class="row"><label><input type="checkbox" id="s_l1" ${s.require_l1 !== 'false' ? 'checked' : ''}> Bắt buộc cấp 1 duyệt trước khi gửi văn phòng</label><label><input type="checkbox" id="s_mn" ${s.meal_in_net !== 'false' ? 'checked' : ''}> Cộng tiền ăn vào thực lĩnh</label><button class="btn" id="s_save">Lưu cài đặt</button></div>
     <div class="muted small">Danh sách chọn năm ở mọi trang chạy từ "Năm nhỏ nhất" đến "Năm lớn nhất" — muốn dùng tới năm nào thì tăng "Năm lớn nhất" ở đây.</div></div>
+  <div class="card"><h2>Phương pháp tính tiền làm lễ, làm thêm</h2>
+    <div class="muted small">Hai phương pháp chỉ khác nhau ở <b>tiền làm lễ, tết</b> và <b>tiền công vượt chuẩn</b> khi có ca đêm. Lương, thưởng, tiền làm đêm 30%, bảo hiểm, ăn ca, ký hiệu làm thêm (LT…) và phụ cấp sửa chữa tính như nhau. Đổi phương pháp xong bấm <b>Tính lại</b> các bảng lương nháp; bảng đã khoá giữ nguyên số cũ. Popup chi tiết từng người ghi rõ đang tính theo phương pháp nào.</div>
+    <div class="small" style="margin:6px 0">Ký hiệu dùng chung: <b>Đơn giá ngày</b> = (lương bảo hiểm + phụ cấp + thưởng) ÷ công tối thiểu (hoặc công chuẩn). <b>% lễ</b> cài ở lịch ngày lễ (vd 300%), <b>% tăng ca</b> là hệ số trả cho công vượt chuẩn (vd 200%), <b>30% làm đêm</b> cài ở ký hiệu công.</div>
+    <label style="display:block;margin-top:8px"><input type="radio" name="s_pm" value="A" ${s.premium_method === 'A' ? 'checked' : ''}> <b>Theo Nghị định 145/2020/NĐ-CP</b> (hướng dẫn Điều 98 Bộ luật Lao động 2019): tính theo từng ca</label>
+    <ul class="small" style="margin:4px 0 0 22px">
+      <li>Tiền làm đêm = đơn giá ngày × công đêm × 30%</li>
+      <li>Tiền làm lễ = đơn giá ngày × công lễ × (% lễ − 100%) + đơn giá ngày × công đêm ngày lễ × 20% × % lễ</li>
+      <li>Tiền công vượt chuẩn = đơn giá ngày × công vượt chuẩn × % tăng ca + đơn giá ngày × công đêm vượt chuẩn × 20% × % tăng ca</li>
+      <li>Ví dụ: ca ngày ngày lễ 300% = <b>300%</b>; ca đêm ngày lễ 300% = 300% + 30% + 20% × 300% = <b>390%</b>; ca đêm vượt chuẩn (tăng ca 200%) = 200% + 30% + 20% × 200% = <b>270%</b>.</li>
+      <li>Căn cứ: Điều 98 Bộ luật Lao động 2019; Điều 55, 56, 57 Nghị định 145/2020/NĐ-CP (làm thêm giờ vào ban đêm được trả thêm 20% tiền lương làm việc ban ngày của ngày đó).</li>
+    </ul>
+    <label style="display:block;margin-top:8px"><input type="radio" name="s_pm" value="B" ${s.premium_method !== 'A' ? 'checked' : ''}> <b>Theo quy chế lương riêng</b> (như bảng Excel nhà máy): tiền làm đêm bình quân cộng vào đơn giá</label>
+    <ul class="small" style="margin:4px 0 0 22px">
+      <li>Tiền làm đêm = đơn giá ngày × công đêm × 30% (như trên)</li>
+      <li>Đơn giá ngày có đêm = (lương bảo hiểm + phụ cấp + thưởng + tiền làm đêm cả tháng) ÷ công tối thiểu</li>
+      <li>Tiền làm lễ = đơn giá ngày có đêm × công lễ × (% lễ − 100%)</li>
+      <li>Tiền công vượt chuẩn = đơn giá ngày có đêm × công vượt chuẩn × % tăng ca</li>
+      <li>Ca đêm ngày lễ không cộng riêng phần đêm theo ca; thay vào đó mọi công lễ / vượt chuẩn (cả ca ngày) tính trên đơn giá đã gồm tiền đêm bình quân của tháng. Tương ứng bảng Excel: T = công đêm × S × 30% ÷ 22, U = (S + T) × công làm thêm × 2 ÷ 22, với S = lương + thưởng + phụ cấp.</li>
+    </ul>
+    <div class="row" style="margin-top:8px"><button class="btn" id="pm_save">Lưu phương pháp tính</button></div></div>
   <div class="card"><h2>Loại trừ tài khoản dùng chung</h2><div class="muted small">Mỗi dòng một cụm từ (không phân biệt hoa thường). Ai có <b>tên, tài khoản hoặc email</b> chứa cụm từ này sẽ bị loại khỏi mọi bảng chấm công / lương khi đồng bộ từ SSO (vd tài khoản Admin, email chung của từng nhà máy/phòng). Chỉ so với <b>tên người</b> (phần trước dấu " - ", không gồm chức danh), tài khoản và email. Ví dụ: <code>admin</code>, <code>@phong-</code>. Đừng nhập tên nhà máy (vd NMTĐ Suối Sập 3) vì sẽ trùng cả nhân viên.</div>
     <textarea id="s_ex" rows="5" style="width:100%;margin-top:6px" placeholder="admin&#10;@phong-">${esc(s.exclude_patterns || '')}</textarea>
     <div class="row" style="margin-top:6px"><button class="btn" id="s_exsave">Lưu &amp; áp dụng ngay</button>${(c.excludeCounts || []).length ? `<div class="small" style="margin:6px 0">${c.excludeCounts.map(x => `<span class="chip" style="background:${x.count > 3 ? '#fee2e2' : '#e5e7eb'}">${esc(x.pattern)} → loại ${x.count} người</span>`).join(' ')} ${c.excludeCounts.some(x => x.count > 3) ? '<b style="color:#b91c1c">Cụm đỏ loại nhiều người: kiểm tra xem có loại nhầm nhân viên không.</b>' : ''}</div>` : ''}<span class="muted small">Đang loại ${(c.excluded || []).length} tài khoản${(c.excluded || []).length ? ': ' + (c.excluded || []).slice(0, 30).map(x => esc(x.name)).join(', ') + ((c.excluded || []).length > 30 ? '…' : '') : ''}</span></div></div>
@@ -364,15 +521,19 @@ async function admCfg(me, box, reload) {
     <table><thead><tr><th>Loại nhân sự</th><th class="n">Lương cơ sở</th><th>Hiệu lực từ</th><th>Ghi chú</th><th style="width:110px"></th></tr></thead><tbody>${c.baseWages.map(b => `<tr><td>${b.employee_type ? empType(b.employee_type) : 'Tất cả'}</td><td class="n"><b>${money(b.value)}</b></td><td>${ymd(b.effective_from)}</td><td>${esc(b.note || '')}</td><td style="white-space:nowrap"><button class="btn sec sm" data-eb="${b.id}">Sửa</button> <button class="btn red sm" data-db="${b.id}">Xoá</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Chưa có — bắt buộc nhập (cho từng loại nhân sự hoặc một mức "Tất cả") trước khi chạy lương</td></tr>'}</tbody></table></div>
   <div class="card"><div class="row"><h2 class="grow" style="margin:0">Đơn giá lương (để tính thưởng)</h2><button class="btn sm" id="addU">+ Thêm đơn giá</button></div><div class="muted small">Ưu tiên: phòng cụ thể > bảng lương > chung; kèm loại nhân sự (quản lý / hành chính / công nhân). Nhờ vậy 2 bộ phận trong cùng 1 nhà máy có thể có 2 đơn giá khác nhau.</div>
     <table><thead><tr><th>Bảng lương</th><th>Phòng</th><th>Loại nhân sự</th><th class="n">Đơn giá</th><th>Hiệu lực từ</th><th style="width:110px"></th></tr></thead><tbody>${c.unitPrices.map(u => `<tr><td>${esc(u.group_name || 'Chung')}</td><td>${esc(u.department_name || 'Tất cả')}</td><td>${u.employee_type ? empType(u.employee_type) : 'Tất cả'}</td><td class="n"><b>${money(u.amount)}</b></td><td>${ymd(u.effective_from)}</td><td style="white-space:nowrap"><button class="btn sec sm" data-eu="${u.id}">Sửa</button> <button class="btn red sm" data-du="${u.id}">Xoá</button></td></tr>`).join('')}</tbody></table></div>` : ''}
-  <div class="card"><div class="row"><h2 class="grow" style="margin:0">Loại hệ số</h2><button class="btn sm" id="addK">+ Thêm</button></div><div class="muted small">Bảo hiểm: nhân lương cơ sở · Thưởng: nhân đơn giá · Số tiền: cộng cố định.</div>
-    <table><tbody>${c.coefTypes.map(k => `<tr><td>${esc(k.code)}</td><td>${esc(k.name)}</td><td>${({ insurance: 'Bảo hiểm', bonus: 'Thưởng', amount: 'Số tiền' })[k.kind]}${k.is_total ? ' <span class="badge">Tổng tự cộng</span>' : ''}</td><td>${k.active ? '✓' : '—'}</td><td><button class="btn sec sm" data-ek="${esc(k.code)}">Sửa</button></td></tr>`).join('')}</tbody></table></div>
+  <div class="card"><div class="row"><h2 class="grow" style="margin:0">Loại hệ số</h2><button class="btn sm" id="addK">+ Thêm</button></div><div class="muted small">Bảo hiểm: nhân lương cơ sở · Thưởng: nhân đơn giá · Số tiền: cộng cố định · Lương đóng BH thỏa thuận: nhập <b>số tiền</b> lương đóng bảo hiểm của người đó; khi lớn hơn 0 thì thay cho hệ số BH × lương cơ sở (vẫn chia theo ngày công, nhân xếp loại lao động; các khoản trừ % bảo hiểm tính theo số này).</div>
+    <table><tbody>${c.coefTypes.map(k => `<tr><td>${esc(k.code)}</td><td>${esc(k.name)}</td><td>${({ insurance: 'Bảo hiểm', bonus: 'Thưởng', amount: 'Số tiền', ins_amount: 'Lương đóng BH thỏa thuận (số tiền thay hệ số BH × lương cơ sở)' })[k.kind] || esc(k.kind)}${k.is_total ? ' <span class="badge">Tổng tự cộng</span>' : ''}</td><td>${k.active ? '✓' : '—'}</td><td><button class="btn sec sm" data-ek="${esc(k.code)}">Sửa</button></td></tr>`).join('')}</tbody></table></div>
   <div class="card"><div class="row"><h2 class="grow" style="margin:0">Khoản trừ định kỳ</h2><button class="btn sm" id="addX">+ Thêm</button></div>
-    <table><tbody>${c.dedTypes.map(k => `<tr><td>${esc(k.name)}</td><td>${k.calc === 'pct_insurance' ? k.value + '% (lương bảo hiểm + phụ cấp)' : money(k.value) + ' đ cố định'}</td><td>${k.active ? '✓' : '—'}</td><td><button class="btn sec sm" data-ex="${esc(k.code)}">Sửa</button></td></tr>`).join('')}</tbody></table></div>`;
+    <div class="muted small" style="margin-bottom:6px">Đánh dấu <b>Được trừ khi tính thuế TNCN</b> cho bảo hiểm bắt buộc người lao động đóng (BHXH, BHYT, BHTN); kinh phí công đoàn và các khoản trừ khác không được trừ khi tính thuế.</div>
+    <table><thead><tr><th>Khoản trừ</th><th>Cách tính</th><th>Thuế TNCN</th><th>Dùng</th><th></th></tr></thead><tbody>${c.dedTypes.map(k => `<tr><td>${esc(k.name)}</td><td>${k.calc === 'pct_insurance' ? k.value + '% (lương bảo hiểm + phụ cấp)' : money(k.value) + ' đ cố định'}</td><td>${k.pit_deductible ? '<span class="badge locked">Được trừ khi tính thuế TNCN</span>' : '<span class="muted small">Không trừ khi tính thuế</span>'}</td><td>${k.active ? '✓' : '—'}</td><td><button class="btn sec sm" data-ex="${esc(k.code)}">Sửa</button></td></tr>`).join('')}</tbody></table></div>
+  <div class="card" id="pitcard"><h2>Thuế thu nhập cá nhân (TNCN)</h2><div id="pitbox"></div></div>
+  ${me.isAdmin ? '<div class="card" id="fundcard"><div class="row"><h2 class="grow" style="margin:0">Quỹ lương (tổng hợp lương theo khối)</h2><button class="btn sm" id="addF">+ Quỹ lương</button></div><div id="fundbox"></div></div>' : ''}`;
   if (!me.isAdmin) {   // người chỉ có quyền "Cài đặt chấm công" / "Hệ số, đơn giá": chỉ thấy các thẻ thuộc quyền của mình
-    const keep = ['Ký hiệu công', 'Nhóm tính phụ cấp', 'Tiền ăn ca', ...(me.assignments.some(x => x.role === 'hr') ? ['Lương cơ sở', 'Đơn giá lương', 'Loại hệ số', 'Khoản trừ'] : [])];
+    const keep = ['Ký hiệu công', 'Nhóm tính phụ cấp', 'Tiền ăn ca', ...(me.assignments.some(x => x.role === 'hr') ? ['Lương cơ sở', 'Đơn giá lương', 'Loại hệ số', 'Khoản trừ', 'Thuế thu nhập cá nhân'] : [])];
     box.querySelectorAll(':scope > .card').forEach(cd => { const h = cd.querySelector('h2'); if (!h || !keep.some(k => h.textContent.trim().startsWith(k))) cd.style.display = 'none'; });
   }
   $('#s_save').onclick = guard(async () => { await PUT('/api/config/settings', { company_name: $('#s_cn').value, year_min: $('#s_y0').value, year_max: $('#s_y1').value, place: $('#s_pl').value, plant_title_head: $('#s_th').value, plant_title_deputy: $('#s_td').value, require_l1: $('#s_l1').checked, meal_in_net: $('#s_mn').checked }); toast('Đã lưu. Tải lại trang để áp dụng danh sách năm.'); });
+  $('#pm_save').onclick = guard(async () => { const v = box.querySelector('[name=s_pm]:checked')?.value; if (!v) return toast('Chọn một phương pháp tính'); await PUT('/api/config/settings', { premium_method: v }); toast('Đã lưu. Bấm Tính lại các bảng lương nháp để áp dụng.'); reload(); });
   $('#s_exsave').onclick = guard(async () => { await PUT('/api/config/settings', { exclude_patterns: $('#s_ex').value }); toast('Đã lưu và áp dụng'); reload(); });
   $('#g_save').onclick = guard(async () => { const labor = {}, safety = {}; box.querySelectorAll('[data-lg]').forEach(i => labor[i.dataset.lg] = i.value); box.querySelectorAll('[data-sg]').forEach(i => safety[i.dataset.sg] = Number(i.value) / 100); await PUT('/api/config/settings', { safety_coef: $('#s_sc').value }); await PUT('/api/config/grades', { labor, safety }); toast('Đã lưu xếp loại'); });
   const yn = [{ v: 'true', t: 'Đang dùng' }, { v: 'false', t: 'Ngừng' }];
@@ -409,12 +570,199 @@ async function admCfg(me, box, reload) {
   mk('#addU', async () => { const r = await ask('Thêm đơn giá lương', [{ label: 'Bảng lương', type: 'select', options: [{ v: '', t: 'Chung (tất cả)' }, ...o.groups.map(g => ({ v: g.id, t: g.name }))] }, { label: 'Phòng / đơn vị', type: 'select', options: [{ v: '', t: 'Tất cả phòng' }, ...o.departments.map(d => ({ v: d.id, t: d.name }))] }, { label: 'Loại nhân sự', type: 'select', options: [{ v: '', t: 'Tất cả' }, ...EMP_TYPE_OPTS] }, { label: 'Đơn giá (đ)', type: 'number' }, { label: 'Hiệu lực từ', type: 'date', value: today }, { label: 'Ghi chú' }]); if (r) { await POST('/api/config/unit-prices', { groupId: r[0], departmentId: r[1], employeeType: r[2], amount: r[3], effectiveFrom: r[4], note: r[5] }); reload(); } });
   box.querySelectorAll('[data-eu]').forEach(b => mk(b, async () => { const x = c.unitPrices.find(k => k.id === b.dataset.eu); const r = await ask('Sửa đơn giá lương', [{ label: 'Bảng lương', type: 'select', options: [{ v: '', t: 'Chung (tất cả)' }, ...o.groups.map(g => ({ v: g.id, t: g.name }))], value: x.group_id || '' }, { label: 'Phòng / đơn vị', type: 'select', options: [{ v: '', t: 'Tất cả phòng' }, ...o.departments.map(d => ({ v: d.id, t: d.name }))], value: x.department_id || '' }, { label: 'Loại nhân sự', type: 'select', options: [{ v: '', t: 'Tất cả' }, ...EMP_TYPE_OPTS], value: x.employee_type || '' }, { label: 'Đơn giá (đ)', type: 'number', value: Number(x.amount) }, { label: 'Hiệu lực từ', type: 'date', value: ymd(x.effective_from) }, { label: 'Ghi chú', value: x.note || '' }]); if (r) { await PATCH('/api/config/unit-prices/' + x.id, { groupId: r[0], departmentId: r[1], employeeType: r[2], amount: r[3], effectiveFrom: r[4], note: r[5] }); reload(); } }));
   box.querySelectorAll('[data-du]').forEach(b => mk(b, async () => { await DEL('/api/config/unit-prices/' + b.dataset.du); reload(); }));
-  const kinds = [{ v: 'insurance', t: 'Bảo hiểm (× lương cơ sở)' }, { v: 'bonus', t: 'Thưởng (× đơn giá)' }, { v: 'amount', t: 'Số tiền cố định' }];
+  const kinds = [{ v: 'insurance', t: 'Bảo hiểm (× lương cơ sở)' }, { v: 'bonus', t: 'Thưởng (× đơn giá)' }, { v: 'amount', t: 'Số tiền cố định' }, { v: 'ins_amount', t: 'Lương đóng BH thỏa thuận (số tiền thay hệ số BH × lương cơ sở)' }];
   mk('#addK', async () => { const r = await ask('Thêm loại hệ số', [{ label: 'Mã (không dấu)' }, { label: 'Tên' }, { label: 'Loại', type: 'select', options: kinds, value: 'bonus' }, { label: 'Thứ tự', type: 'number', value: 100 }]); if (r) { await POST('/api/config/coefficient-types', { code: r[0], name: r[1], kind: r[2], sort_order: r[3] }); reload(); } });
   box.querySelectorAll('[data-ek]').forEach(b => mk(b, async () => { const x = c.coefTypes.find(k => k.code === b.dataset.ek); const r = await ask('Sửa hệ số ' + x.code, [{ label: 'Tên', value: x.name }, { label: 'Loại', type: 'select', options: kinds, value: x.kind }, { label: 'Thứ tự', type: 'number', value: x.sort_order }, { label: 'Trạng thái', type: 'select', options: yn, value: String(x.active) }, { label: 'Là TỔNG hệ số thưởng (chỉ loại Thưởng): tự cộng các hệ số thưởng khác, không nhập tay, hiện ở cuối bảng hệ số', type: 'select', options: [{ v: 'false', t: 'Không' }, { v: 'true', t: 'Có — tổng tự cộng' }], value: String(!!x.is_total) }]); if (r) { await PATCH('/api/config/coefficient-types/' + encodeURIComponent(x.code), { name: r[0], kind: r[1], sort_order: r[2], active: r[3], is_total: r[4] === 'true' && r[1] === 'bonus' }); reload(); } }));
   const calcs = [{ v: 'pct_insurance', t: '% của (lương bảo hiểm + phụ cấp)' }, { v: 'fixed', t: 'Số tiền cố định' }];
-  mk('#addX', async () => { const r = await ask('Thêm khoản trừ định kỳ', [{ label: 'Mã' }, { label: 'Tên' }, { label: 'Cách tính', type: 'select', options: calcs }, { label: 'Giá trị (% hoặc đ)', type: 'number', step: '0.01' }]); if (r) { await POST('/api/config/deduction-types', { code: r[0], name: r[1], calc: r[2], value: r[3] }); reload(); } });
-  box.querySelectorAll('[data-ex]').forEach(b => mk(b, async () => { const x = c.dedTypes.find(k => k.code === b.dataset.ex); const r = await ask('Sửa khoản trừ', [{ label: 'Tên', value: x.name }, { label: 'Cách tính', type: 'select', options: calcs, value: x.calc }, { label: 'Giá trị', type: 'number', step: '0.01', value: x.value }, { label: 'Trạng thái', type: 'select', options: yn, value: String(x.active) }]); if (r) { await PATCH('/api/config/deduction-types/' + encodeURIComponent(x.code), { name: r[0], calc: r[1], value: r[2], active: r[3] }); reload(); } }));
+  const pitDed = { label: 'Được trừ khi tính thuế TNCN (BHXH, BHYT, BHTN bắt buộc: Có; kinh phí công đoàn: Không)', type: 'select', options: [{ v: 'false', t: 'Không' }, { v: 'true', t: 'Có — được trừ khi tính thuế TNCN' }] };
+  mk('#addX', async () => { const r = await ask('Thêm khoản trừ định kỳ', [{ label: 'Mã' }, { label: 'Tên' }, { label: 'Cách tính', type: 'select', options: calcs }, { label: 'Giá trị (% hoặc đ)', type: 'number', step: '0.01' }, { ...pitDed, value: 'false' }]); if (r) { await POST('/api/config/deduction-types', { code: r[0], name: r[1], calc: r[2], value: r[3], pit_deductible: r[4] }); reload(); } });
+  box.querySelectorAll('[data-ex]').forEach(b => mk(b, async () => { const x = c.dedTypes.find(k => k.code === b.dataset.ex); const r = await ask('Sửa khoản trừ', [{ label: 'Tên', value: x.name }, { label: 'Cách tính', type: 'select', options: calcs, value: x.calc }, { label: 'Giá trị', type: 'number', step: '0.01', value: x.value }, { label: 'Trạng thái', type: 'select', options: yn, value: String(x.active) }, { ...pitDed, value: String(!!x.pit_deductible) }]); if (r) { await PATCH('/api/config/deduction-types/' + encodeURIComponent(x.code), { name: r[0], calc: r[1], value: r[2], active: r[3], pit_deductible: r[4] }); reload(); } }));
+  admPitCard(me, c, $('#pitbox'));
+  if (me.isAdmin) admFundCard(c, o, $('#fundbox'), $('#addF'));
+}
+
+// ---------- Cấu hình › Thuế TNCN: biểu thuế theo năm (số bậc tuỳ ý) + trừ thuế tạm tính vào thưởng ----------
+let ADM_PIT_YEAR = null;   // biểu đang chọn (giữ khi vẽ lại thẻ)
+function admPitCard(me, c, el) {
+  const isAdm = me.isAdmin, wh0 = c.settings.pit_withhold === 'bonus' ? 'bonus' : 'none';
+  // Sửa biểu thuế: Admin hoặc "Quản lý hệ số" toàn hệ thống (người chỉ quản lý hệ số 1 bảng lương thì chỉ xem)
+  const canEd = isAdm || me.assignments.some(a => a.role === 'hr' && a.scope_type === 'all'), dis = canEd ? '' : ' disabled title="Chỉ Admin hoặc Quản lý hệ số toàn hệ thống mới sửa được biểu thuế"';
+  // % bảo hiểm bắt buộc được trừ khi tính thuế (chỉ để vẽ ví dụ)
+  const pctIns = c.dedTypes.filter(k => k.pit_deductible && k.active && k.calc === 'pct_insurance').reduce((s, k) => s + Number(k.value || 0), 0) || 10.5;
+  const capIn = v => v === null || v === undefined ? '' : Number(v);
+  const toEd = s => ({ year: s.year, self_deduction: Number(s.self_deduction) || 0, dependent_deduction: Number(s.dependent_deduction) || 0, health_cap: capIn(s.health_cap), education_cap: capIn(s.education_cap), note: s.note || '',
+    brackets: (s.brackets || []).map(b => ({ upto: b.upto === null || b.upto === undefined ? null : Number(b.upto), rate: Number(b.rate) })) });
+  let ed = null, dirty = false, helpOpen = true;
+  try { helpOpen = localStorage.getItem('pr_pit_help') !== '0'; } catch (e) {}
+  const list = () => [...c.pitSchedules].sort((a, b) => a.year - b.year);
+  const select = y => { const s = c.pitSchedules.find(x => x.year === y) || admPitSched(c.pitSchedules, me.now.year); ADM_PIT_YEAR = s ? s.year : null; ed = s ? toEd(s) : null; dirty = false; };
+  const refetch = async y => { const r = await GET('/api/config'); c.pitSchedules = r.pitSchedules; select(y); draw(); };
+  const capTxt = v => v === '' || v === null || v === undefined ? 'không giới hạn' : Number(v) === 0 ? 'không áp dụng' : money(v);
+  // Ví dụ tính theo biểu đang sửa (đổi số là ví dụ đổi theo)
+  const exHtml = () => {
+    if (!ed || !ed.brackets.length) return '';
+    const taxable = 30000000, base = 14000000, bh = Math.round(base * pctIns / 100), self = ed.self_deduction || 0, dep = ed.dependent_deduction || 0, ded = bh + self + dep, ass = Math.max(0, taxable - ded), p = admPitProgressive(ass, ed.brackets, 12);
+    return `<b>Ví dụ</b> (biểu năm ${ed.year}, tháng thường, 1 người phụ thuộc): lương bảo hiểm 12.000.000 + phụ cấp 2.000.000 + thưởng 16.000.000 = thu nhập chịu thuế <b>${money(taxable)}</b>; tiền làm đêm 3.000.000 và ăn ca 1.200.000 cùng tháng <b>không</b> tính.
+      Giảm trừ = bảo hiểm bắt buộc ${admPct(pctIns)}% × 14.000.000 = ${money(bh)} + bản thân ${money(self)} + 1 người phụ thuộc ${money(dep)} = <b>${money(ded)}</b>.
+      Thu nhập tính thuế = ${money(taxable)} − ${money(ded)} = <b>${money(ass)}</b> → ${p.parts.map(x => `bậc ${x.level}: ${money(x.base)} × ${admPct(x.rate)}% = ${money(x.tax)}`).join('; ') || 'chưa đến mức chịu thuế'} → thuế tạm tính tháng <b>${money(p.tax)}</b>.
+      <br>Tháng 12: nếu thuế cả năm theo biểu là 4.000.000 mà tháng 1–11 đã tạm tính 4.300.000 thì thuế tháng 12 = 4.000.000 − 4.300.000 = <b>−300.000</b> (được hoàn 300.000).`;
+  };
+  const moTxt = i => { const b = ed.brackets, last = i === b.length - 1; return last ? (i ? (b[i - 1].upto > 0 ? 'trên ' + money(b[i - 1].upto / 12) : '') : 'mọi mức') : b[i].upto > 0 ? 'đến ' + money(b[i].upto / 12) : '<span class="muted">—</span>'; };
+  const draw = () => {
+    const L = list(), cur = admPitSched(L, me.now.year), sel = ed && !ed.isNew ? L.find(s => s.year === ed.year) : null;
+    const span = (s, i) => (i < L.length - 1 ? (L[i + 1].year - 1 > s.year ? `${s.year}–${L[i + 1].year - 1}` : `${s.year}`) : `${s.year} trở đi`) + (i === 0 ? ' (và các năm trước)' : '');
+    const mIn = (id, v, label, ph) => `<div class="field"><label>${label}</label><input id="${id}" type="number" min="0" step="100000" value="${v === '' || v === null || v === undefined ? '' : v}" ${ph ? `placeholder="${ph}"` : ''}><div class="muted small" data-mv="${id}"></div></div>`;
+    el.innerHTML = `<div class="muted small">Áp dụng cho người hưởng lương <b>theo hệ số</b>. Người <b>lương khoán / thù lao</b> không tính ở đây vì đã khấu trừ thuế vãng lai 10% (tỷ lệ cài từng người ở tab Nhân sự).</div>
+      <details class="pithelp" ${helpOpen ? 'open' : ''}><summary>Cách tính thuế TNCN</summary><div class="cols">
+        <p><b>Biểu thuế dùng cho năm nào.</b> Mỗi năm tính thuế dùng biểu có <b>năm áp dụng gần nhất nhưng không sau năm đó</b> (vd có biểu 2020 và 2026: năm 2020–2025 dùng biểu 2020; từ 2026 dùng biểu 2026 cho đến khi có biểu mới hơn). Luật đổi từ năm nào thì bấm <b>Tạo biểu cho năm mới</b> rồi sửa — không sửa biểu cũ để các năm trước giữ đúng số. Số bậc tuỳ ý; mức "đến" của mỗi bậc nhập theo <b>cả năm</b>, bậc cuối không giới hạn.</p>
+        <p><b>Thu nhập chịu thuế</b> mỗi tháng = <b>lương bảo hiểm</b> (gồm phụ cấp an toàn) + <b>phụ cấp</b> + <b>thưởng</b>.<br><b>Không tính thuế:</b> tiền làm đêm, làm thêm, làm lễ tết (cả phần lương và phần thưởng) và <b>toàn bộ tiền ăn ca</b>.</p>
+        <p><b>Giảm trừ</b></p><ul>
+          <li>Bản thân: mức / tháng của biểu.</li>
+          <li>Người phụ thuộc: số người được tính trong tháng × mức mỗi người (khai ở Nhân sự › cột Người phụ thuộc, có tháng bắt đầu / kết thúc).</li>
+          <li>Bảo hiểm bắt buộc trừ vào lương: các khoản trừ đánh dấu <b>Được trừ khi tính thuế TNCN</b> (BHXH, BHYT, BHTN; không gồm kinh phí công đoàn).</li>
+          <li>Chi phí y tế, giáo dục, khoản giảm trừ khác của từng người theo năm (khai cùng chỗ người phụ thuộc): y tế, giáo dục tối đa theo mức của biểu; khoản khác không giới hạn.</li></ul>
+        <p><b>Tạm tính tháng 1–11</b></p><ul>
+          <li>Thu nhập tính thuế = thu nhập chịu thuế − bản thân − người phụ thuộc − bảo hiểm − (y tế + giáo dục + khác của cả năm) ÷ 12; âm thì bằng 0.</li>
+          <li>Thuế lũy tiến từng phần với mức trần mỗi bậc <b>÷ 12</b> (vd bậc 1 đến 120 triệu / năm → đến 10 triệu / tháng).</li>
+          <li>Người có lương ở nhiều bảng lương trong cùng tháng: cộng chung thu nhập, thuế chia cho từng bảng theo tỷ lệ thu nhập chịu thuế.</li></ul>
+        <p><b>Tháng 12 — quyết toán năm</b></p><ul>
+          <li>Cộng thu nhập chịu thuế và bảo hiểm cả 12 tháng; giảm trừ bản thân × 12, người phụ thuộc theo tổng số tháng được tính; y tế, giáo dục (sau mức tối đa) và khoản khác: đủ số cả năm.</li>
+          <li>Thuế tháng 12 = thuế cả năm theo biểu (mức trần không chia) − thuế đã tạm tính tháng 1–11. <b>Âm = được hoàn</b> (nếu đang trừ vào thưởng thì cộng trả lại vào thưởng tháng 12).</li>
+          <li>Đổi biểu thuế, người phụ thuộc hay giảm trừ: các bảng lương chưa khoá liên quan được đánh dấu cần <b>Tính lại</b>; bảng đã khoá giữ nguyên số đã tính.</li></ul>
+        <div class="ex" id="pit_ex">${exHtml()}</div>
+        <p class="legal"><b>Lưu ý pháp lý:</b> theo Nghị định 253/2026/NĐ-CP (Điều 51), giảm trừ chi phí y tế và giáo dục do người lao động tự kê khai khi <b>tự quyết toán</b> thuế TNCN. Vì vậy số thuế công ty tính ở đây (kể cả quyết toán tháng 12) chỉ là <b>ước tính</b> để tạm khấu trừ; số phải nộp chính thức theo quyết toán của người lao động.</p></div></details>
+      <h3 style="margin:12px 0 6px">Biểu thuế theo năm <span class="muted small" style="font-weight:normal">— bấm một dòng để xem / sửa</span></h3>
+      <div class="scroll" style="max-height:none"><table><thead><tr><th>Năm áp dụng</th><th>Dùng cho năm</th><th class="n">Số bậc</th><th>Thuế suất các bậc</th><th class="n">Giảm trừ bản thân / tháng</th><th class="n">Mỗi người phụ thuộc / tháng</th><th class="n">Y tế tối đa / năm</th><th class="n">Giáo dục tối đa / năm</th><th>Cập nhật</th></tr></thead><tbody>
+        ${L.map((s, i) => `<tr class="pitrow ${ed && !ed.isNew && ed.year === s.year ? 'on' : ''}" data-py="${s.year}"><td style="white-space:nowrap"><b>${s.year}</b>${cur && cur.year === s.year ? ` <span class="badge locked">đang áp dụng ${me.now.year}</span>` : ''}</td><td>${span(s, i)}</td><td class="n">${(s.brackets || []).length}</td><td class="small">${(s.brackets || []).map(b => admPct(b.rate) + '%').join(' · ')}</td>
+          <td class="n">${money(s.self_deduction)}</td><td class="n">${money(s.dependent_deduction)}</td><td class="n small">${capTxt(s.health_cap)}</td><td class="n small">${capTxt(s.education_cap)}</td><td class="small">${s.updated_by ? `${esc(s.updated_by_name || s.updated_by)}<br>${dt(s.updated_at)}` : '<span class="muted">mẫu cài sẵn</span>'}</td></tr>`).join('')}
+        ${ed && ed.isNew ? `<tr class="pitrow on"><td><b data-dy>${ed.year}</b> <span class="badge draft">mới, chưa lưu</span></td><td colspan="8" class="muted small">${ed.from ? `Sao chép từ biểu năm ${ed.from} — sửa` : 'Nhập biểu'} bên dưới rồi bấm Lưu.</td></tr>` : ''}
+        ${L.length || (ed && ed.isNew) ? '' : '<tr><td colspan="9" class="muted">Chưa có biểu thuế nào — thuế TNCN chưa được tính.</td></tr>'}</tbody></table></div>
+      ${ed ? `<div class="pited"><div class="row" style="margin-bottom:6px"><h3 class="grow" style="margin:0">${ed.isNew ? `Biểu thuế mới năm <span data-dy>${ed.year}</span>` : `Biểu thuế năm ${ed.year}`}</h3><span class="badge draft" id="pe_dirty" ${dirty ? '' : 'hidden'}>có thay đổi chưa lưu</span></div>
+        ${sel && sel.has_locked ? `<div class="warnbox small">Từ năm ${ed.year} đã có bảng lương <b>đã khoá</b>. Sửa biểu này chỉ ảnh hưởng các bảng lương <b>chưa khoá</b> (cần bấm Tính lại); bảng đã khoá giữ nguyên số thuế đã tính. Nếu luật đổi từ một năm mới, hãy bấm "Tạo biểu cho năm mới" thay vì sửa biểu này.</div>` : ''}
+        <div class="fgrid"><div class="field"><label>Năm áp dụng</label><input id="pe_y" type="number" min="2000" max="2200" value="${ed.year}" ${ed.isNew ? '' : 'disabled title="Muốn đổi năm: bấm Tạo biểu cho năm mới (sao chép), rồi xoá biểu này nếu cần"'}><div class="muted small" data-mv="pe_y"></div></div>
+          ${mIn('pe_self', ed.self_deduction, 'Giảm trừ bản thân / tháng (đ)')}${mIn('pe_dep', ed.dependent_deduction, 'Giảm trừ mỗi người phụ thuộc / tháng (đ)')}
+          ${mIn('pe_hc', ed.health_cap, 'Chi phí y tế được trừ tối đa / năm (đ)', 'trống = không giới hạn')}${mIn('pe_ec', ed.education_cap, 'Chi phí giáo dục được trừ tối đa / năm (đ)', 'trống = không giới hạn')}</div>
+        <div class="field"><label>Ghi chú (căn cứ pháp lý)</label><textarea id="pe_note" rows="2">${esc(ed.note)}</textarea></div>
+        <table class="pitbr"><thead><tr><th>Bậc</th><th class="n">Thu nhập tính thuế đến (cả năm, đ)</th><th class="n">Tương đương / tháng (÷ 12)</th><th class="n">Thuế suất (%)</th><th></th></tr></thead><tbody>
+          ${ed.brackets.map((b, i) => { const last = i === ed.brackets.length - 1; return `<tr><td style="white-space:nowrap"><b>Bậc ${i + 1}</b></td>
+            <td class="n">${last ? `<span class="muted" data-blast>Trên mức bậc trước${i && ed.brackets[i - 1].upto > 0 ? ` (trên ${money(ed.brackets[i - 1].upto)})` : ''}</span>` : `<input type="number" min="0" step="1000000" data-bu="${i}" value="${b.upto ?? ''}"><div class="muted small" data-bmv="${i}">${b.upto > 0 ? money(b.upto) + ' đ' : ''}</div>`}</td>
+            <td class="n" data-bm="${i}">${moTxt(i)}</td><td class="n"><input type="number" class="rate" min="0" max="100" step="0.5" data-br="${i}" value="${Number.isFinite(b.rate) ? b.rate : ''}"></td>
+            <td><button class="btn red sm" data-bx="${i}" ${ed.brackets.length < 2 ? 'disabled' : ''}>Xoá bậc</button></td></tr>`; }).join('')}</tbody></table>
+        <div class="row" style="margin-top:6px"><button class="btn sec sm" id="pe_add"${dis}>+ Thêm bậc</button><span class="muted small">Bậc mới chèn trước bậc cuối (bậc không giới hạn). Xoá bậc cuối thì bậc liền trước thành bậc không giới hạn.</span></div>
+        <div class="row" style="margin:10px 0 0"><button class="btn" id="pe_save"${dis}>Lưu biểu thuế</button>
+          ${ed.isNew ? '<button class="btn sec" id="pe_cancel">Huỷ biểu mới</button>' : `<button class="btn sec" id="pe_new"${dis}>Tạo biểu cho năm mới</button><button class="btn sec" id="pe_reset" ${dirty ? '' : 'hidden'}>Bỏ thay đổi</button><span class="grow"></span><button class="btn red" id="pe_del"${dis}>Xoá biểu này</button>`}</div>
+        ${canEd ? '' : '<div class="muted small">Bạn chỉ xem được biểu thuế: chỉ Admin hoặc người "Quản lý hệ số" toàn hệ thống mới sửa được.</div>'}</div>`
+      : `<div class="row" style="margin-top:8px"><button class="btn" id="pe_blank"${dis}>Tạo biểu thuế</button></div>`}
+      <h3 style="margin:16px 0 6px">Trừ thuế tạm tính vào lương</h3>
+      <label class="pitopt"><input type="radio" name="pit_wh" value="none" ${wh0 === 'none' ? 'checked' : ''} ${isAdm ? '' : 'disabled'}> <b>Chỉ ước tính, không trừ vào lương</b> — bảng lương hiện thuế TNCN tạm tính để tham khảo, thực nhận không đổi (mặc định).</label>
+      <label class="pitopt"><input type="radio" name="pit_wh" value="bonus" ${wh0 === 'bonus' ? 'checked' : ''} ${isAdm ? '' : 'disabled'}> <b>Trừ thuế tạm tính vào thưởng thực nhận</b> — mỗi tháng tự thêm khoản trừ vào thưởng "Thuế TNCN (tạm tính)"; tháng 12 là "Thuế TNCN (quyết toán năm)", số âm được cộng trả lại vào thưởng.</label>
+      <div class="warnbox small" style="margin-top:6px">Nếu hằng tháng vẫn nhập tay khoản "Thuế TNCN" loại <b>Trừ vào thưởng</b> (Bảng lương › Thưởng / khoản trừ tháng) thì khi chọn "Trừ thuế tạm tính vào thưởng thực nhận" thuế sẽ bị <b>trừ hai lần</b> — hãy bỏ khoản nhập tay đó.</div>
+      ${isAdm ? '<div class="row"><button class="btn" id="pit_wh_save">Lưu cách xử lý thuế</button><span class="muted small">Đổi xong bấm Tính lại các bảng lương nháp; bảng đã khoá giữ nguyên.</span></div>' : '<div class="muted small">Chỉ Admin đổi được cài đặt này.</div>'}`;
+    bind();
+  };
+  // Cập nhật phần tính sẵn (÷ 12, số tiền dễ đọc, ví dụ) khi gõ — không vẽ lại cả thẻ để không mất con trỏ
+  const hints = () => {
+    if (!ed) return;
+    const mv = (id, h) => { const x = el.querySelector(`[data-mv="${id}"]`); if (x) x.innerHTML = h; };
+    mv('pe_y', ed.isNew ? 'Năm bắt đầu dùng biểu này' : 'Đổi năm: Tạo biểu cho năm mới');
+    mv('pe_self', `${money(ed.self_deduction)} đ / tháng · ${money(ed.self_deduction * 12)} đ / năm`); mv('pe_dep', `${money(ed.dependent_deduction)} đ / người / tháng`);
+    for (const [id, k] of [['pe_hc', 'health_cap'], ['pe_ec', 'education_cap']]) mv(id, ed[k] === '' ? 'Trống = không giới hạn · 0 = không áp dụng' : Number(ed[k]) === 0 ? '0 = không áp dụng (không được trừ)' : `${money(ed[k])} đ / năm · tạm tính ≈ ${money(ed[k] / 12)} / tháng`);
+    ed.brackets.forEach((b, i) => { const m = el.querySelector(`[data-bm="${i}"]`), v = el.querySelector(`[data-bmv="${i}"]`); if (m) m.innerHTML = moTxt(i); if (v) v.textContent = b.upto > 0 ? money(b.upto) + ' đ' : ''; });
+    const n = ed.brackets.length, lb = el.querySelector('[data-blast]'); if (lb) lb.textContent = 'Trên mức bậc trước' + (n > 1 && ed.brackets[n - 2].upto > 0 ? ` (trên ${money(ed.brackets[n - 2].upto)})` : '');
+    el.querySelectorAll('[data-dy]').forEach(x => { x.textContent = ed.year || '?'; });
+    const ex = el.querySelector('#pit_ex'); if (ex) ex.innerHTML = exHtml();
+  };
+  const touch = () => { dirty = true; const d = el.querySelector('#pe_dirty'), r = el.querySelector('#pe_reset'); if (d) d.hidden = false; if (r) r.hidden = false; hints(); };
+  const bad = (sel, msg) => { const i = el.querySelector(sel); if (i) { i.classList.add('bad'); i.focus(); } throw new Error(msg); };
+  function bind() {
+    const q = s => el.querySelector(s);
+    el.querySelector('.pithelp').ontoggle = e => { helpOpen = e.target.open; try { localStorage.setItem('pr_pit_help', helpOpen ? '1' : '0'); } catch (x) {} };
+    el.querySelectorAll('[data-py]').forEach(tr => tr.onclick = () => { const y = Number(tr.dataset.py); if (ed && !ed.isNew && ed.year === y) return; if (dirty && !confirm(`Biểu năm ${ed.year} có thay đổi chưa lưu. Bỏ các thay đổi đó?`)) return; select(y); draw(); });
+    if (q('#pe_blank')) q('#pe_blank').onclick = () => { ed = { year: me.now.year, self_deduction: 0, dependent_deduction: 0, health_cap: '', education_cap: '', note: '', brackets: [{ upto: null, rate: NaN }], isNew: true, from: null }; dirty = true; draw(); };
+    if (!ed) return bindWh();
+    el.querySelectorAll('.pited input, .pited textarea').forEach(i => i.addEventListener('input', () => i.classList.remove('bad')));
+    if (ed.isNew) q('#pe_y').oninput = e => { ed.year = Number(e.target.value) || ''; touch(); };
+    for (const [id, k, nullable] of [['pe_self', 'self_deduction'], ['pe_dep', 'dependent_deduction'], ['pe_hc', 'health_cap', 1], ['pe_ec', 'education_cap', 1]]) q('#' + id).oninput = e => { ed[k] = e.target.value === '' ? (nullable ? '' : 0) : Number(e.target.value); touch(); };
+    q('#pe_note').oninput = e => { ed.note = e.target.value; touch(); };
+    el.querySelectorAll('[data-bu]').forEach(i => i.oninput = () => { ed.brackets[+i.dataset.bu].upto = i.value === '' ? null : Number(i.value); touch(); });
+    el.querySelectorAll('[data-br]').forEach(i => i.oninput = () => { ed.brackets[+i.dataset.br].rate = i.value === '' ? NaN : Number(i.value); touch(); });
+    el.querySelectorAll('[data-bx]').forEach(b => b.onclick = () => { ed.brackets.splice(+b.dataset.bx, 1); const n = ed.brackets.length; if (n) ed.brackets[n - 1].upto = null; dirty = true; draw(); });
+    q('#pe_add').onclick = () => { const at = Math.max(0, ed.brackets.length - 1); ed.brackets.splice(at, 0, { upto: null, rate: NaN }); dirty = true; draw(); el.querySelector(`[data-bu="${at}"]`)?.focus(); };
+    q('#pe_save').onclick = guard(async () => {
+      const y = Number(ed.year), n = ed.brackets.length;
+      if (!Number.isInteger(y) || y < 2000 || y > 2200) bad('#pe_y', 'Năm áp dụng phải từ 2000 đến 2200');
+      if (ed.isNew && c.pitSchedules.some(s => s.year === y)) bad('#pe_y', `Đã có biểu thuế năm ${y} — chọn biểu đó trong danh sách để sửa`);
+      if (!n) throw new Error('Biểu thuế phải có ít nhất 1 bậc');
+      ed.brackets.forEach((b, i) => {
+        if (i < n - 1 && !(b.upto > 0)) bad(`[data-bu="${i}"]`, `Bậc ${i + 1}: nhập mức thu nhập tính thuế tối đa của bậc (cả năm)`);
+        if (i > 0 && i < n - 1 && b.upto <= ed.brackets[i - 1].upto) bad(`[data-bu="${i}"]`, `Bậc ${i + 1}: mức tối đa phải lớn hơn bậc ${i}`);
+        if (!Number.isFinite(b.rate) || b.rate < 0 || b.rate > 100) bad(`[data-br="${i}"]`, `Bậc ${i + 1}: nhập thuế suất từ 0 đến 100%`);
+      });
+      await PUT(`/api/config/pit-schedules/${y}`, { self_deduction: ed.self_deduction, dependent_deduction: ed.dependent_deduction, health_cap: ed.health_cap === '' ? null : ed.health_cap, education_cap: ed.education_cap === '' ? null : ed.education_cap,
+        brackets: ed.brackets.map((b, i) => ({ upto: i === n - 1 ? null : b.upto, rate: b.rate })), note: ed.note });
+      await refetch(y); toast(`Đã lưu biểu thuế năm ${y}. Các bảng lương chưa khoá từ năm ${y} được đánh dấu cần Tính lại.`);
+    });
+    if (q('#pe_cancel')) q('#pe_cancel').onclick = () => { select(ADM_PIT_YEAR); draw(); };
+    if (q('#pe_reset')) q('#pe_reset').onclick = () => { select(ed.year); draw(); };
+    if (q('#pe_new')) q('#pe_new').onclick = guard(async () => {
+      const def = Math.max(me.now.year, ...c.pitSchedules.map(s => s.year)) + 1;
+      const r = await ask('Tạo biểu thuế cho năm mới', [{ label: `Năm bắt đầu áp dụng — sao chép các số đang hiện của biểu năm ${ed.year}, sửa xong bấm "Lưu biểu thuế"`, type: 'number', value: def }], 'Tạo');
+      if (!r) return; const y = Number(r[0]);
+      if (!Number.isInteger(y) || y < 2000 || y > 2200) throw new Error('Năm áp dụng phải từ 2000 đến 2200');
+      if (c.pitSchedules.some(s => s.year === y)) throw new Error(`Đã có biểu thuế năm ${y} — chọn biểu đó trong danh sách để sửa`);
+      ed = { ...ed, brackets: ed.brackets.map(b => ({ ...b })), year: y, note: '', isNew: true, from: ed.year }; dirty = true; draw();
+    });
+    if (q('#pe_del')) q('#pe_del').onclick = guard(async () => {
+      const L = list(), i = L.findIndex(s => s.year === ed.year), prev = L[i - 1], next = L[i + 1];
+      if (L.length <= 1) throw new Error('Phải giữ ít nhất 1 biểu thuế');
+      if (!await confirmBox(`Xoá biểu thuế năm ${ed.year}? ${prev ? `Các năm đang dùng biểu này sẽ dùng biểu năm ${prev.year}.` : `Các năm đang dùng biểu này sẽ dùng biểu năm ${next.year}.`} Các bảng lương chưa khoá cần Tính lại.`)) return;
+      await DEL(`/api/config/pit-schedules/${ed.year}`); await refetch(null); toast('Đã xoá biểu thuế');
+    });
+    hints(); bindWh();
+  }
+  function bindWh() {
+    const b = el.querySelector('#pit_wh_save'); if (!b) return;
+    b.onclick = guard(async () => { const v = el.querySelector('[name=pit_wh]:checked')?.value; if (!v) throw new Error('Chọn một cách xử lý'); await PUT('/api/config/settings', { pit_withhold: v }); c.settings.pit_withhold = v; toast(v === 'bonus' ? 'Đã lưu: trừ thuế tạm tính vào thưởng. Bấm Tính lại các bảng lương nháp để áp dụng.' : 'Đã lưu: chỉ ước tính, không trừ vào lương. Bấm Tính lại các bảng lương nháp để áp dụng.'); });
+  }
+  select(ADM_PIT_YEAR); draw();
+}
+
+// ---------- Cấu hình › Quỹ lương (khối) để tổng hợp tiền lương theo nguồn quỹ ----------
+function admFundCard(c, o, el, addBtn) {
+  const RT = Object.fromEntries(ADM_FUND_RULES), yn = [{ v: 'true', t: 'Đang dùng' }, { v: 'false', t: 'Ngừng' }];
+  const refresh = async withOrg => { const [r, g] = await Promise.all([GET('/api/config'), withOrg ? GET('/api/org') : null]); c.salaryFunds = r.salaryFunds; if (g) o.departments = g.departments; draw(); };
+  function draw() {
+    const F = c.salaryFunds, miss = ADM_FUND_RULES.filter(([r]) => r && !F.some(f => f.active && f.rule === r));
+    el.innerHTML = `<div class="muted small" style="margin:6px 0 8px;line-height:1.55">Dùng để tổng hợp tiền lương theo nguồn quỹ (khối). Khi tính lương, mỗi người được xếp vào <b>một</b> quỹ theo thứ tự ưu tiên:
+        <b>1)</b> quỹ chọn riêng cho người đó ở <b>Nhân sự</b> (cột Quỹ lương); <b>2)</b> quỹ của bộ phận tính lương của người đó ở <b>Tổ chức</b> (Sửa bộ phận); <b>3)</b> quy tắc tự xếp: bộ phận liên kết <b>HĐQT</b> → quỹ có quy tắc "Bộ phận HĐQT"; bộ phận <b>Ban kiểm soát</b> → "Bộ phận Ban kiểm soát"; người ở bảng lương <b>văn phòng</b> → "Bảng lương văn phòng"; ở <b>nhà máy</b>: người có kíp → "công nhân vận hành", người không có kíp → "quản lý, hành chính".
+        <br>Mỗi quy tắc chỉ gắn cho một quỹ. Quỹ không có quy tắc (vd <b>Khối sửa chữa</b>) chỉ nhận người / bộ phận được chọn — vd vào Tổ chức › Sửa bộ phận Sửa chữa › Quỹ lương = Khối sửa chữa. Quỹ được ghi vào từng dòng lương lúc tính: đổi xong bấm <b>Tính lại</b> các bảng lương chưa khoá; bảng đã khoá giữ quỹ cũ. Quỹ <b>Ngừng</b> không còn tự xếp theo quy tắc và không hiện trong danh sách chọn.</div>
+      ${miss.length ? `<div class="warnbox small">Chưa có quỹ đang dùng cho quy tắc: ${miss.map(([, t]) => `<b>${esc(t)}</b>`).join('; ')} — người thuộc trường hợp này (nếu không được chọn quỹ) sẽ ở mục "Chưa xếp quỹ" trên báo cáo.</div>` : ''}
+      <table><thead><tr><th>Mã</th><th>Tên quỹ lương</th><th>Tự xếp theo quy tắc</th><th>Bộ phận chọn quỹ này (Tổ chức)</th><th>Ghi chú</th><th class="n">Thứ tự</th><th>Dùng</th><th></th></tr></thead><tbody>
+      ${F.map(f => `<tr><td><b>${esc(f.code)}</b></td><td>${esc(f.name)}</td><td class="small">${f.rule ? esc(RT[f.rule] || f.rule) : '<span class="muted">không tự xếp</span>'}</td><td class="small">${o.departments.filter(d => d.fund_id === f.id).map(d => esc(d.name)).join(', ') || '<span class="muted">—</span>'}</td>
+        <td class="small">${esc(f.note || '')}</td><td class="n">${f.sort_order}</td><td>${f.active ? '✓' : '—'}</td><td style="white-space:nowrap"><button class="btn sec sm" data-ef="${f.id}">Sửa</button> <button class="btn red sm" data-df="${f.id}">Xoá</button></td></tr>`).join('') || '<tr><td colspan="8" class="muted">Chưa có quỹ lương nào.</td></tr>'}</tbody></table>`;
+    el.querySelectorAll('[data-ef]').forEach(b => b.onclick = guard(() => form(F.find(f => f.id === b.dataset.ef))));
+    el.querySelectorAll('[data-df]').forEach(b => b.onclick = guard(async () => {
+      const f = F.find(x => x.id === b.dataset.df); if (!await confirmBox(`Xoá quỹ lương "${f.name}"? Chỉ xoá được quỹ chưa có trong bảng lương nào đã tính; người và bộ phận đang chọn quỹ này về "Tự xếp". Quỹ đã có trong bảng lương thì không xoá được (để giữ đúng báo cáo các tháng cũ) — hãy sửa Trạng thái = Ngừng.`)) return;
+      await DEL('/api/config/salary-funds/' + f.id); await refresh(true); toast('Đã xoá quỹ lương');
+    }));
+  }
+  async function form(f) {
+    const F = c.salaryFunds, used = r => F.find(x => x.rule === r && x.id !== f?.id);
+    const r = await ask(f ? 'Sửa quỹ lương ' + f.name : 'Thêm quỹ lương', [{ label: 'Mã (ngắn, không trùng)', value: f?.code || '' }, { label: 'Tên quỹ lương', value: f?.name || '' },
+      { label: 'Tự xếp theo quy tắc (mỗi quy tắc chỉ gắn 1 quỹ). Người / bộ phận đã được chọn quỹ thì không theo quy tắc', type: 'select', options: ADM_FUND_RULES.map(([v, t]) => ({ v, t: t + (v && used(v) ? ` — đang gắn: ${used(v).name}` : '') })), value: f?.rule || '' },
+      { label: 'Ghi chú', value: f?.note || '' }, { label: 'Thứ tự (in / báo cáo)', type: 'number', value: f?.sort_order ?? (Math.max(0, ...F.map(x => x.sort_order)) + 10) }, { label: 'Trạng thái', type: 'select', options: yn, value: String(f?.active ?? true) }]);
+    if (!r) return;
+    const [code, name] = [r[0].trim(), r[1].trim()]; if (!code || !name) throw new Error('Nhập mã và tên quỹ lương');
+    if (F.some(x => x.id !== f?.id && x.code === code)) throw new Error(`Đã có quỹ lương mã "${code}"`);
+    const other = r[2] && used(r[2]);
+    if (other && !await confirmBox(`Quy tắc "${RT[r[2]]}" đang gắn cho quỹ "${other.name}". Chuyển quy tắc này sang quỹ "${name}"?`)) return;
+    if (other) await PATCH('/api/config/salary-funds/' + other.id, { rule: '' });
+    const b = { code, name, rule: r[2], note: r[3], sort_order: r[4] === '' ? 0 : r[4], active: r[5] };
+    f ? await PATCH('/api/config/salary-funds/' + f.id, b) : await POST('/api/config/salary-funds', b);
+    await refresh(); toast('Đã lưu — bấm Tính lại các bảng lương chưa khoá để xếp lại quỹ');
+  }
+  if (addBtn) addBtn.onclick = guard(() => form(null));
+  draw();
 }
 
 // ---------- Nhật ký ----------

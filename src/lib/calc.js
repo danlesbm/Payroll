@@ -1,6 +1,6 @@
 // Công thức tính lương — hàm thuần, dễ kiểm thử.
 const { payRatio } = require('./workdays');
-const { PREMIUM_METHOD } = require('./premium-method');
+const { methodOf } = require('./premium-method');
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const round = n => Math.round(num(n));
 const ymd = v => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
@@ -65,7 +65,7 @@ function autoMealQty(codes, codeMeals) {
 }
 const mealAmount = (qty, rate) => round(Object.entries(qty).reduce((s, [t, q]) => s + num(q) * num(rate[t]), 0));
 
-/** Lương BH = Σ hệ số 'insurance' × lương cơ sở ÷ công chuẩn × công tính lương (xem payRatio)
+/** Lương BH = Σ hệ số 'insurance' × lương cơ sở (hoặc lương đóng BH thỏa thuận — loại 'ins_amount') ÷ công chuẩn × công tính lương (xem payRatio)
  *  Thưởng   = Σ hệ số 'bonus' × đơn giá ÷ công chuẩn × công tính thưởng + thưởng thêm trong tháng
  *  Phụ cấp  = Σ 'amount' (cố định)
  *  Khoản trừ= trừ định kỳ (% lương BH hoặc cố định) + trừ trong tháng
@@ -100,15 +100,17 @@ function calcLine(i) {
   const lf = i.laborFactor === undefined || i.laborFactor === null ? 1 : num(i.laborFactor);
   // Phần "chính" tối đa 1 lần công chuẩn; phần công vượt chuẩn là làm thêm, tách riêng (nhóm "làm thêm")
   const mainS = Math.min(ratio, 1), mainB = Math.min(ratioBonus, 1), overS = Math.max(ratio - 1, 0), overB = Math.max(ratioBonus - 1, 0);
-  const insuranceFull = round(insCoef * num(i.baseWage) * mainS);        // lương BH chưa nhân xếp loại (cơ sở tính % trừ BH, không gồm làm đêm/thêm/lễ)
-  const insuranceSalary = round(insCoef * num(i.baseWage) * mainS * lf);
+  // Lương đóng BH cả tháng = hệ số BH × lương cơ sở; người có "lương đóng BH thỏa thuận" (loại hệ số ins_amount > 0) dùng số tiền thỏa thuận thay thế
+  const insAmount = round(sumKind('ins_amount')), insMonthly = insAmount > 0 ? insAmount : insCoef * num(i.baseWage);
+  const insuranceFull = round(insMonthly * mainS);        // lương BH chưa nhân xếp loại (cơ sở tính % trừ BH, không gồm làm đêm/thêm/lễ)
+  const insuranceSalary = round(insMonthly * mainS * lf);
   // Căn cứ tính làm đêm / làm thêm / lễ phần lương = lương BH (đủ công, đã nhân xếp loại) + phụ cấp (gồm phụ cấp an toàn)
-  const premBaseS = insCoef * num(i.baseWage) * lf + allowance;
+  const premBaseS = insMonthly * lf + allowance;
   const pd = i.premiumDays || {}, pdB = i.premiumDaysBonus || pd;
   // Phương án B (Excel nhà máy): làm thêm (công vượt chuẩn) và làm lễ tính trên đơn giá ngày ĐÃ GỒM tiền làm đêm bình quân của tháng:
   // (lương + thưởng + phụ cấp + tiền làm đêm) ÷ công chuẩn × số công × % → hệ số (1 + công đêm tương đương ÷ công chuẩn).
   // Phương án A (Thông tư): hệ số = 1, phần đêm × % lễ / tăng ca đã nằm trong premiumDays. Xem src/lib/premium-method.js.
-  const premiumMethod = i.premiumMethod || PREMIUM_METHOD, methodA = premiumMethod === 'A';
+  const premiumMethod = methodOf(i.premiumMethod), methodA = premiumMethod === 'A';
   const nfS = !methodA && div > 0 ? 1 + num(pd.night) / div : 1, nfB = !methodA && div > 0 ? 1 + num(pdB.night) / div : 1;
   const otSalaryAmt = round(premBaseS * overS * nfS), otBonusAmt = round(bonusCoef * num(i.unitPrice) * overB * lf * pf * nfB);
   const bonusBase = round(bonusCoef * num(i.unitPrice) * mainB * lf * pf);
@@ -149,7 +151,7 @@ function calcLine(i) {
   const salaryNet = insuranceSalary + salaryPremium + allowance - deduction;        // lương thực lĩnh (bảng lương)
   const bonusNet = bonus + bonusPremium - bonusDeduction;                           // thưởng thực nhận (bảng thưởng)
   const net = salaryNet + bonusNet + (i.mealInNet === false ? 0 : meal);
-  return { ratio: Math.round(ratio * 10000) / 10000, ratioBonus: Math.round(ratioBonus * 10000) / 10000, payStatus: pr.status, otDays: pr.otDays, rateDiv: div, minDays: minD, standardDays: std, dailySalary, dailyBonus, nightSalary: outS.night, nightBonus: outB.night, extraSalary: outS.extra, extraBonus: outB.extra, holidaySalary: outS.holiday, holidayBonus: outB.holiday, premiumInBonus: toBonus, premiumMethod, premSal, premBon, otSalaryAmt, otBonusAmt, salaryPremium, bonusPremium, premiumDays: { night: num(pd.night), extra: num(pd.extra), holiday: num(pd.holiday) }, laborFactor: lf, planFactor: pf, insuranceFull, insuranceBase, premBaseSalary: round(premBaseS), safetyFactor: sf, safetyAllowance, safetyBase, insCoef, bonusCoef, insuranceSalary, bonusBase, bonus, allowance, meal,
+  return { ratio: Math.round(ratio * 10000) / 10000, ratioBonus: Math.round(ratioBonus * 10000) / 10000, payStatus: pr.status, otDays: pr.otDays, rateDiv: div, minDays: minD, standardDays: std, dailySalary, dailyBonus, nightSalary: outS.night, nightBonus: outB.night, extraSalary: outS.extra, extraBonus: outB.extra, holidaySalary: outS.holiday, holidayBonus: outB.holiday, premiumInBonus: toBonus, premiumMethod, premSal, premBon, otSalaryAmt, otBonusAmt, salaryPremium, bonusPremium, premiumDays: { night: num(pd.night), extra: num(pd.extra), holiday: num(pd.holiday) }, laborFactor: lf, planFactor: pf, insuranceFull, insuranceBase, insAmount, insMonthly: round(insMonthly), premBaseSalary: round(premBaseS), safetyFactor: sf, safetyAllowance, safetyBase, insCoef, bonusCoef, insuranceSalary, bonusBase, bonus, allowance, meal,
     periodicDeduction: periodic, monthlyDeduction, monthlyBonus, bonusDeduction, salaryNet, bonusNet, deduction, net, deductionDetail, extraDetail };
 }
 // Lương khoán / thù lao: số tiền cố định, khấu trừ thuế TNCN vãng lai = số tiền × tỷ lệ (mặc định 10%) khi số tiền chi từ ngưỡng trở lên
