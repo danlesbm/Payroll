@@ -4,7 +4,7 @@ const { audit } = require('../auth');
 const { bad, isUuid, str, api } = require('../lib/http');
 const { STATUS_LABEL, nextStatus } = require('../lib/workflow');
 const { validYM, nowVN } = require('../lib/dates');
-const { calculateRun, markStale } = require('../services/payroll');
+const { calculateRun, markStale, fixedMembers } = require('../services/payroll');
 const { mealReport } = require('../services/meals');
 const G = require('../services/grades');
 const X = require('../services/exports');
@@ -28,7 +28,8 @@ const sheetOut = list => list.map(s => ({ id: s.id, name: s.name, status: s.stat
 router.get('/groups', api(async req => {
   const { year, month } = ym(req);
   const out = [];
-  for (const g of await rows('SELECT id, code, name, kind FROM groups WHERE active ORDER BY sort_order, name')) {
+  for (const g of await rows(`SELECT id, code, name, kind, pay_type, (SELECT count(*)::int FROM employees e WHERE e.fixed_group_id=groups.id AND e.pay_mode='fixed' AND e.payroll_active AND e.sso_status='active' AND NOT e.excluded) AS fixed_count
+      FROM groups WHERE active ORDER BY sort_order, name`)) {
     if (!req.auth.canAny(PAY_ROLES, gctx(g.id))) continue;
     const run = await one('SELECT id, status, stale, calculated_at, signed_at FROM payroll_runs WHERE group_id=$1 AND year=$2 AND month=$3', [g.id, year, month]);
     const tot = run ? await one('SELECT COALESCE(sum(net),0) AS t, count(*)::int AS n FROM payroll_lines WHERE run_id=$1', [run.id]) : null;
@@ -42,20 +43,21 @@ const titleSettings = async () => Object.fromEntries((await rows("SELECT key, va
 router.get('/:groupId/:year/:month', api(async req => {
   const groupId = groupParam(req); const { year, month } = ym(req);
   if (!req.auth.canAny(PAY_ROLES, gctx(groupId))) bad('Bạn không được phân quyền xem bảng lương này', 403);
-  const group = await one('SELECT id, name, kind FROM groups WHERE id=$1', [groupId]);
+  const group = await one('SELECT id, name, kind, pay_type, tax_threshold FROM groups WHERE id=$1', [groupId]);
   if (!group) bad('Không tìm thấy bảng lương', 404);
+  const fixed = group.pay_type === 'fixed';
   const run = await one('SELECT * FROM payroll_runs WHERE group_id=$1 AND year=$2 AND month=$3', [groupId, year, month]);
   const lines = run ? await rows(`SELECT pl.*, e.full_name, e.employee_code, e.positions, e.title, e.title_manual, e.is_lead, e.shift_no, e.employee_type, v.pay_department_name AS department_name
       FROM payroll_lines pl JOIN employees e ON e.id=pl.employee_id LEFT JOIN v_employees v ON v.id=e.id WHERE pl.run_id=$1
       ORDER BY v.pay_department_sort NULLS LAST, v.pay_department_name, v.emp_order, e.sort_order, e.full_name`, [run.id]) : [];
   const stT = await titleSettings(); lines.forEach(l => { l.positions = posTitle(l, group.kind, stT); });
   const sheets = relevant(await groupSheets(pool, groupId, year, month));
-  const allIn = list => sheets.length > 0 && sheets.every(s => list.includes(s.status));
+  const allIn = list => (fixed || sheets.length > 0) && sheets.every(s => list.includes(s.status));   // bảng lương khoán không có bảng chấm công
   const allReceived = allIn(['pending_l2', 'pending_l3']);
   const allL2 = allIn(['pending_l2']), allL3 = allIn(['pending_l3']), allDir = allIn(['pending_dir']);
   const ctx = gctx(groupId), st = run?.status || 'none', actions = [];
   // Cấp 2: chạy lương nháp ngay khi cấp 1 trình lên; sửa công/hệ số/thưởng-trừ rồi chốt trình cấp 3
-  if ((st === 'none' || st === 'draft') && req.auth.can('l2', ctx)) actions.push({ key: 'calculate', label: run ? 'Tính lại lương nháp' : 'Chạy lương nháp', enabled: sheets.length > 0, hint: 'Lương nháp tự cập nhật mỗi khi có thay đổi chấm công; bấm để tính lại thủ công' });
+  if ((st === 'none' || st === 'draft') && req.auth.can('l2', ctx)) actions.push({ key: 'calculate', label: run ? 'Tính lại lương nháp' : 'Chạy lương nháp', enabled: fixed || sheets.length > 0, hint: fixed ? '' : 'Lương nháp tự cập nhật mỗi khi có thay đổi chấm công; bấm để tính lại thủ công' });
   if (st === 'draft' && req.auth.can('l2', ctx)) actions.push({ key: 'submit', label: 'Cấp 2 chốt, trình cấp 3', enabled: allL2 && !run.stale, hint: !allL2 ? 'Các bảng chấm công phải đang ở bước "Cấp 2 xử lý"' : run.stale ? 'Dữ liệu đã thay đổi, hãy tính lại trước' : '' });
   // Cấp 3: được sửa công, tính lại, rồi chốt trình Giám đốc hoặc trả lại cấp 2
   if (st === 'submitted' && req.auth.can('l3', ctx)) {
@@ -72,7 +74,10 @@ router.get('/:groupId/:year/:month', api(async req => {
   if (['locked', 'pending_dir', 'submitted'].includes(st) && req.auth.isAdmin) actions.push({ key: 'reopen', label: 'Mở khoá / đưa về cấp 2 (Admin)', enabled: true, needNote: true });
   const ids = run ? [run.calculated_by, run.submitted_by, run.locked_by, run.signed_by].filter(Boolean) : [];
   const names = ids.length ? await rows('SELECT sso_user_id, full_name FROM employees WHERE sso_user_id = ANY($1::text[])', [ids]) : [];
-  return { group, year, month, run, runLabel: run ? RUN_LABEL[run.status] : 'Chưa tính', lines, actions, sheets: sheetOut(sheets),
+  // Bảng lương khoán: danh sách mọi người thuộc bảng (kể cả người tháng này không chi) để nhập số tiền riêng của tháng
+  const fixedEdit = fixed && (st === 'none' || st === 'draft' ? req.auth.can('l2', ctx) : st === 'submitted' && req.auth.can('l3', ctx));
+  const members = fixed ? (await fixedMembers(pool, groupId, year, month)).map(m => ({ id: m.id, full_name: m.full_name, fixed_amount: m.fixed_amount, fixed_tax_pct: m.fixed_tax_pct, month_amount: m.month_amount, month_note: m.month_note })) : undefined;
+  return { group, year, month, run, runLabel: run ? RUN_LABEL[run.status] : 'Chưa tính', lines, actions, sheets: sheetOut(sheets), members, fixedEdit,
     coefTypes: await rows('SELECT code, name, kind, is_total FROM coefficient_types WHERE active ORDER BY sort_order, code'), names: Object.fromEntries(names.map(n => [n.sso_user_id, n.full_name])) };
 }));
 
@@ -116,7 +121,8 @@ router.post('/:groupId/:year/:month/submit', api(async req => {
     if (run.stale) bad('Dữ liệu đã thay đổi sau lần tính gần nhất. Hãy bấm "Tính lại" rồi mới trình.', 409);
     const sheets = relevant(await groupSheets(c, groupId, year, month));
     const wrong = sheets.filter(s => s.status !== 'pending_l2');
-    if (!sheets.length || wrong.length) bad('Chưa thể trình: ' + wrong.map(s => `${s.name} (${STATUS_LABEL[s.status] || 'chưa tạo'})`).join('; '), 409);
+    const fixed = (await q(c, 'SELECT pay_type FROM groups WHERE id=$1', [groupId]))[0]?.pay_type === 'fixed';
+    if ((!sheets.length && !fixed) || wrong.length) bad('Chưa thể trình: ' + wrong.map(s => `${s.name} (${STATUS_LABEL[s.status] || 'chưa tạo'})`).join('; '), 409);
     await setPeriods(c, groupId, year, month, 'pending_l2', 'pending_l3', uid, 'send_final');
     await c.query(`UPDATE payroll_runs SET status='submitted', submitted_by=$2, submitted_at=now(), note=NULL WHERE id=$1`, [run.id, uid]);
     return run.id;
@@ -214,6 +220,31 @@ router.post('/:groupId/:year/:month/reopen', api(async req => {
   return { ok: true };
 }));
 
+// Bảng lương khoán: nhập số tiền riêng của tháng cho từng người (trống = dùng số tiền mặc định ở Nhân sự; 0 = tháng này không chi), rồi tính lại ngay
+router.put('/:groupId/:year/:month/fixed-amounts', api(async req => {
+  const groupId = groupParam(req); const { year, month } = ym(req);
+  const list = Array.isArray(req.body?.items) ? req.body.items : bad('Không có dữ liệu');
+  const r = await tx(async c => {
+    const g = (await q(c, 'SELECT pay_type FROM groups WHERE id=$1', [groupId]))[0];
+    if (!g) bad('Không tìm thấy bảng lương', 404);
+    if (g.pay_type !== 'fixed') bad('Chỉ bảng lương khoán mới nhập số tiền theo tháng');
+    const cur = (await q(c, 'SELECT status FROM payroll_runs WHERE group_id=$1 AND year=$2 AND month=$3 FOR UPDATE', [groupId, year, month]))[0];
+    if (cur && !['draft', 'submitted'].includes(cur.status)) bad('Bảng lương đã trình Giám đốc hoặc đã khoá, không sửa được', 409);
+    if (cur?.status === 'submitted') req.auth.need('l3', gctx(groupId), 'Bảng đang ở cấp 3, chỉ cấp 3 mới sửa được'); else req.auth.need('l2', gctx(groupId), 'Chỉ cấp 2 mới được nhập số tiền');
+    const ids = new Set((await fixedMembers(c, groupId, year, month)).map(m => m.id));
+    for (const it of list) {
+      if (!isUuid(it.employeeId) || !ids.has(it.employeeId)) bad('Có người không thuộc bảng lương khoán này');
+      if (it.amount === '' || it.amount === null || it.amount === undefined) { await c.query('DELETE FROM fixed_pay_months WHERE employee_id=$1 AND year=$2 AND month=$3', [it.employeeId, year, month]); continue; }
+      const a = Number(it.amount); if (!Number.isFinite(a) || a < 0 || a > 1e11) bad('Số tiền không hợp lệ');
+      await c.query(`INSERT INTO fixed_pay_months(employee_id, year, month, amount, note, updated_by) VALUES($1,$2,$3,$4,$5,$6)
+        ON CONFLICT (employee_id, year, month) DO UPDATE SET amount=EXCLUDED.amount, note=EXCLUDED.note, updated_by=EXCLUDED.updated_by, updated_at=now()`, [it.employeeId, year, month, Math.round(a), str(it.note).slice(0, 200) || null, req.auth.user.id]);
+    }
+    return calculateRun(c, { groupId, year, month, userId: req.auth.user.id });
+  });
+  await audit(req, 'payroll.fixed_amounts', 'payroll_run', r.run.id, { year, month, items: list });
+  return { ok: true, count: r.count };
+}));
+
 const csvCell = v => { const s = String(v ?? ''); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
 router.get('/:groupId/:year/:month/export', async (req, res) => {
   const groupId = groupParam(req); const { year, month } = ym(req);
@@ -231,12 +262,12 @@ router.get('/:groupId/:year/:month/export', async (req, res) => {
 router.get('/:groupId/:year/:month/export/:what', async (req, res) => {
   const groupId = groupParam(req); const { year, month } = ym(req);
   if (!req.auth.canAny(PAY_ROLES, gctx(groupId))) bad('Bạn không được phân quyền xem bảng lương này', 403);
-  const fn = { luong: X.salaryXlsx, thuong: X.bonusXlsx, 'he-so': X.coefXlsx, 'an-ca': X.mealXlsx }[req.params.what];
+  const fn = { luong: X.salaryXlsx, thuong: X.bonusXlsx, 'he-so': X.coefXlsx, 'an-ca': X.mealXlsx, khoan: X.fixedXlsx }[req.params.what];
   if (!fn) bad('Loại bảng không hợp lệ', 404);
   const g = await one('SELECT name FROM groups WHERE id=$1', [groupId]); if (!g) bad('Không tìm thấy bảng lương', 404);
   const buf = await fn(pool, groupId, year, month);
   await audit(req, 'export.' + req.params.what, 'group', groupId, { year, month });
-  sendXlsx(res, buf, `${{ luong: 'bang-luong', thuong: 'bang-thuong', 'he-so': 'bang-he-so', 'an-ca': 'tien-an-ca' }[req.params.what]}-${slug(g.name)}-${year}-${pad2(month)}.xlsx`);
+  sendXlsx(res, buf, `${{ luong: 'bang-luong', thuong: 'bang-thuong', 'he-so': 'bang-he-so', 'an-ca': 'tien-an-ca', khoan: 'bang-luong-khoan' }[req.params.what]}-${slug(g.name)}-${year}-${pad2(month)}.xlsx`);
 });
 router.get('/meals/:groupId/:year/:month', api(async req => {
   const groupId = groupParam(req); const { year, month } = ym(req);
@@ -352,7 +383,7 @@ const itemRouter = require('express').Router();
 itemRouter.get('/roster', api(async req => {
   const groupId = req.query.groupId; if (!isUuid(groupId)) bad('Chọn bảng lương');
   if (!req.auth.canAny(PAY_ROLES, gctx(groupId))) bad('Bạn không có quyền xem', 403);
-  return { employees: await rows(`SELECT id, full_name, pay_department_name AS department_name FROM v_employees WHERE group_id=$1 AND sso_status='active' AND payroll_active ORDER BY pay_department_sort NULLS LAST, pay_department_name, emp_order, sort_order, full_name`, [groupId]) };
+  return { employees: await rows(`SELECT id, full_name, pay_department_name AS department_name FROM v_employees WHERE group_id=$1 AND sso_status='active' AND payroll_active AND pay_mode<>'fixed' ORDER BY pay_department_sort NULLS LAST, pay_department_name, emp_order, sort_order, full_name`, [groupId]) };
 }));
 itemRouter.get('/', api(async req => {
   const { year, month } = ym(req); const groupId = req.query.groupId;
