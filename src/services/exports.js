@@ -309,4 +309,22 @@ async function attendanceXlsx(c, sheetIds, year, month) {
   if (!made) { const e = new Error('Chưa có bảng chấm công tháng này để xuất.'); e.status = 404; throw e; }
   return wb.toBuffer();
 }
-module.exports = { salaryXlsx, bonusXlsx, coefXlsx, mealXlsx, attendanceXlsx };
+// Bảng lương khoán / thù lao: số tiền, thuế TNCN vãng lai khấu trừ, thực nhận
+async function fixedXlsx(c, groupId, year, month) {
+  const d = await payrollData(c, groupId, year, month);
+  const wb = new Workbook(), ws = wb.sheet('Lương khoán');
+  const cols = [
+    { h: 'TT', w: 5, tt: true, val: () => '' }, { h: 'Họ và tên', w: 28, val: l => l.full_name }, { h: 'Chức vụ', w: 16, val: l => l.positions || '' },
+    { h: 'Nội dung', w: 22, val: l => l.detail.note || '' },
+    { h: 'Số tiền', w: 15, fmt: MONEY, sum: true, val: l => n(l.detail.amount) },
+    { h: 'Tỷ lệ khấu trừ (%)', w: 10, fmt: 'General', al: 'center', val: l => (l.detail.taxed ? n(l.detail.taxPct) : 0) },
+    { h: 'Thuế TNCN khấu trừ', w: 14, fmt: MONEY, sum: true, val: l => n(l.deduction) },
+    { h: 'Số tiền thực nhận', w: 15, fmt: MONEY, sum: true, val: l => n(l.net) },
+    { h: 'Ký nhận', w: 14, val: () => '' }
+  ];
+  let r = head(ws, cols.length, d.st.company_name, title('BẢNG THANH TOÁN LƯƠNG KHOÁN', d.group, year, month));
+  r = table(ws, r, cols, [{ name: d.group.name, rows: d.lines }], { deptRows: false });
+  signBlock(ws, r, cols.length, await paySigners(c, d.group, d.run), d.st.place || 'Hà Nội', dateText(null, d.run));
+  return wb.toBuffer();
+}
+module.exports = { salaryXlsx, bonusXlsx, coefXlsx, mealXlsx, attendanceXlsx, fixedXlsx };

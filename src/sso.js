@@ -97,7 +97,7 @@ async function syncDirectory() {
           positions=EXCLUDED.positions, sso_dept_ids=EXCLUDED.sso_dept_ids, sso_unit_ids=EXCLUDED.sso_unit_ids, pos_rank=EXCLUDED.pos_rank, title=EXCLUDED.title, sso_status=EXCLUDED.sso_status, synced_at=now(), updated_at=now()`,
         [id, cleanName(rawName, positions), u.email || null, u.username || null, positions || null, deptIds, locked ? 'locked' : 'active', unitIds, rawName, posRank(positions, title), looksLead(rawName), (!looksWorker(rawName) && posRank(positions) <= 40) ? 'manager' : 'worker', title || null]);
     }
-    await c.query(`UPDATE employees SET sso_status='missing', updated_at=now() WHERE NOT (sso_user_id = ANY($1::text[])) AND sso_status<>'missing'`, [seen]);
+    await c.query(`UPDATE employees SET sso_status='missing', updated_at=now() WHERE NOT (sso_user_id = ANY($1::text[])) AND sso_status<>'missing' AND sso_user_id NOT LIKE 'manual:%'`, [seen]);
     await applyExclusions(c);
   });
   return { users: dir.users.length, departments: dir.departments.length + extraCount };

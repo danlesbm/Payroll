@@ -310,12 +310,13 @@ PAGES.payroll = async (me, root) => {
     const r = await GET(`/api/payroll/groups?year=${ymState.year}&month=${ymState.month}`);
     root.innerHTML = `<div class="card"><div class="row"><h2 class="grow">Bảng lương</h2>${ymPicker(me)}</div>
       ${r.groups.length ? `<div class="grid">${r.groups.map(g => `<div class="tile" data-id="${g.id}"><b>${esc(g.name)}</b><div style="margin:6px 0">${badge(g.run?.status || 'none').replace(/>[^<]*</, '>' + esc(g.runLabel) + '<')}${g.run?.stale ? ' <span class="badge draft">Cần tính lại</span>' : ''}</div>
-        <div class="small muted">${g.sheets.map(s => esc(s.name) + ': ' + esc(s.statusLabel)).join('<br>') || 'Chưa có bảng chấm công'}</div>
+        <div class="small muted">${g.pay_type === 'fixed' ? `Bảng lương khoán · ${g.fixed_count} người` : g.sheets.map(s => esc(s.name) + ': ' + esc(s.statusLabel)).join('<br>') || 'Chưa có bảng chấm công'}</div>
         ${g.line_count ? `<div style="margin-top:6px"><b>${money(g.total_net)}</b> <span class="muted small">thực lĩnh · ${g.line_count} người</span></div>` : ''}</div>`).join('')}</div>` : '<div class="muted">Bạn chưa được phân quyền với bảng lương nào.</div>'}</div>`;
     bindYm(list); root.querySelectorAll('.tile').forEach(t => t.onclick = () => detail(t.dataset.id));
   }
   async function detail(gid) {
     const d = await GET(`/api/payroll/${gid}/${ymState.year}/${ymState.month}`);
+    if (d.group.pay_type === 'fixed') return fixedDetail(gid, d);
     const sum = k => d.lines.reduce((s, l) => s + Number(l[k]), 0);
     // Lương thực lĩnh / thưởng thực nhận (như chi tiết từng người); bảng tính trước khi có 2 số này thì suy từ các cột cũ
     const salNet = l => Number(l.detail.salaryNet ?? (+l.insurance_salary + +l.allowance - +l.deduction)), bonNet = l => Number(l.detail.bonusNet ?? l.bonus);
@@ -367,6 +368,44 @@ PAGES.payroll = async (me, root) => {
       return download(k === 'cham-cong' ? `/api/attendance/export/group/${gid}/${y}/${m}` : `/api/payroll/${gid}/${y}/${m}/export/${k}`, `${k}-${d.group.name}-${y}-${String(m).padStart(2, '0')}.xlsx`); }));
     $('#items').onclick = guard(() => items(gid, d));
     root.querySelectorAll('tbody tr[data-i]').forEach(tr => tr.onclick = () => lineDetail(d, d.lines[+tr.dataset.i]));
+  }
+  // Bảng lương khoán: số tiền khoán − thuế vãng lai = thực nhận; số tiền từng tháng sửa ngay trên bảng (trống = mặc định ở Nhân sự, 0 = tháng này không chi)
+  function fixedDetail(gid, d) {
+    const L = d.lines, byEmp = new Map(L.map(l => [l.employee_id, l])), tot = f => L.reduce((s, l) => s + Number(f(l) || 0), 0);
+    const pct = l => l.detail.taxed ? Number(l.detail.taxPct) + '%' : `<span class="muted" title="Dưới ngưỡng ${money(l.detail.taxThreshold)} đ">không trừ</span>`;
+    const table = `<div class="scroll" style="margin-top:10px"><table class="paytb"><thead><tr><th>#</th><th>Họ tên</th><th>Chức danh</th><th>Nội dung</th><th class="n">Số tiền</th><th class="n" title="Tỷ lệ khấu trừ thuế TNCN vãng lai">Thuế VL</th><th class="n">Thuế khấu trừ</th><th class="n">Thực nhận</th></tr></thead>
+      <tbody>${L.map((l, i) => `<tr data-i="${i}" style="cursor:pointer"><td>${i + 1}</td><td class="nm"><b>${esc(l.full_name)}</b></td><td class="ps">${esc(l.positions || '')}</td><td class="small">${esc(l.detail.note || '')}</td><td class="n">${money(l.detail.amount)}</td><td class="n">${pct(l)}</td><td class="n">${money(l.deduction)}</td><td class="n"><b>${money(l.net)}</b></td></tr>`).join('')}</tbody>
+      <tfoot><tr><th colspan="4">Tổng cộng</th><th class="n">${money(tot(l => l.detail.amount))}</th><th></th><th class="n">${money(tot(l => l.deduction))}</th><th class="n">${money(tot(l => l.net))}</th></tr></tfoot></table></div>`;
+    const ed = d.fixedEdit && (d.members || []).length ? `<div class="card" style="margin-top:12px;background:#faf5ff"><div class="row"><h3 class="grow" style="margin:0">Số tiền tháng ${d.month}/${d.year}</h3><button class="btn" id="fx_save">Lưu & tính lại</button></div>
+      <div class="muted small">Để trống = dùng số tiền mặc định ở Quản trị › Nhân sự. Nhập số tiền khác nếu tháng này chi khác (vd lao động thời vụ); nhập 0 nếu tháng này không chi.</div>
+      <table><thead><tr><th>Họ tên</th><th class="n">Mặc định</th><th class="n">Thuế VL</th><th>Số tiền tháng này</th><th>Nội dung</th></tr></thead><tbody>${d.members.map(m => `<tr data-fx="${m.id}"><td>${esc(m.full_name)}</td><td class="n">${money(m.fixed_amount)}</td><td class="n">${Number(m.fixed_tax_pct)}%</td>
+        <td><input type="number" min="0" step="100000" style="width:130px;text-align:right" data-amt value="${m.month_amount === null || m.month_amount === undefined ? '' : Number(m.month_amount)}" placeholder="${money(m.fixed_amount)}"></td><td><input data-note style="width:220px" maxlength="200" value="${esc(m.month_note || '')}" placeholder="vd Thù lao HĐQT tháng ${d.month}"></td></tr>`).join('')}</tbody></table></div>` : '';
+    root.innerHTML = `<div class="card"><div class="row"><button class="btn sec" id="back">← Danh sách</button><h2 class="grow" style="margin:0">${esc(d.group.name)} — ${d.month}/${d.year}</h2><span class="badge">Lương khoán</span>${badge(d.run?.status || 'none').replace(/>[^<]*</, '>' + esc(d.runLabel) + '<')}${d.run?.stale ? '<span class="badge draft">Cần tính lại</span>' : ''}</div>
+      <div class="small muted" style="margin-bottom:8px">Thực nhận = số tiền − thuế TNCN vãng lai (tỷ lệ của từng người, cài ở Quản trị › Nhân sự; chỉ trừ khi số tiền từ ${money(d.group.tax_threshold)} đ trở lên). Người trong bảng: chọn ở Quản trị › Nhân sự (cột Cách tính lương) hoặc Tổ chức › Chọn người lương khoán.</div>
+      ${d.run?.note ? `<div class="warnbox">Ghi chú: ${esc(d.run.note)}</div>` : ''}
+      <div class="row">${d.actions.map(a => `<button class="btn ${a.key === 'return' || a.key === 'dreturn' || a.key === 'reopen' ? 'red' : a.key === 'calculate' ? '' : 'warn'}" data-a="${a.key}" ${a.enabled ? '' : 'disabled'} title="${esc(a.hint || '')}">${esc(a.label)}</button>`).join('')}
+        ${d.run ? '<button class="btn sec" id="xfx">Xuất Excel bảng lương khoán</button>' : ''}</div>
+      ${d.actions.filter(a => !a.enabled && a.hint).map(a => `<div class="muted small">⚠ ${esc(a.label)}: ${esc(a.hint)}</div>`).join('')}
+      ${d.run ? `<div class="small muted">Tính lúc ${dt(d.run.calculated_at)}${d.names[d.run.calculated_by] ? ' bởi ' + esc(d.names[d.run.calculated_by]) : ''}${d.run.locked_at ? ' · Hoàn thành ' + dt(d.run.locked_at) : ''}${d.run.signed_at ? ' · Giám đốc ký ' + dt(d.run.signed_at) : ''}</div>` : ''}
+      ${L.length ? table : `<div class="muted" style="margin-top:12px">${d.run ? 'Tháng này không có ai được chi.' : 'Chưa tính. Bấm "Chạy lương nháp".'}</div>`}${ed}</div>`;
+    $('#back').onclick = list;
+    root.querySelectorAll('[data-a]').forEach(b => b.onclick = guard(async () => {
+      const k = b.dataset.a, a = d.actions.find(x => x.key === k); let body = {};
+      if (a.needNote) { const r = await ask(a.label, [{ label: 'Lý do', type: 'textarea' }]); if (!r) return; body.note = r[0]; }
+      else if (a.needConfirm && !await confirmBox('Khoá bảng lương khoán tháng này? Sau khi khoá không ai sửa được, chỉ Admin mở khoá được (có ghi lịch sử).')) return;
+      const r = await POST(`/api/payroll/${gid}/${ymState.year}/${ymState.month}/${k}`, body);
+      toast(k === 'calculate' ? `Đã tính ${r.count} người` : 'Đã thực hiện'); detail(gid);
+    }));
+    if ($('#xfx')) $('#xfx').onclick = guard(() => download(`/api/payroll/${gid}/${ymState.year}/${ymState.month}/export/khoan`, `bang-luong-khoan-${d.group.name}-${ymState.year}-${String(ymState.month).padStart(2, '0')}.xlsx`));
+    if ($('#fx_save')) $('#fx_save').onclick = guard(async () => {
+      const items = [...root.querySelectorAll('tr[data-fx]')].map(tr => ({ employeeId: tr.dataset.fx, amount: tr.querySelector('[data-amt]').value, note: tr.querySelector('[data-note]').value }));
+      const r = await PUT(`/api/payroll/${gid}/${ymState.year}/${ymState.month}/fixed-amounts`, { items }); toast(`Đã lưu và tính lại: ${r.count} người được chi`); detail(gid);
+    });
+    root.querySelectorAll('tbody tr[data-i]').forEach(tr => tr.onclick = () => { const l = L[+tr.dataset.i], x = l.detail, row = (t, v, b) => `<tr><td>${t}</td><td class="n">${b ? '<b>' + v + '</b>' : v}</td></tr>`;
+      modal(`<h2>${esc(l.full_name)}<span class="x">✕</span></h2><div class="muted small">${esc(l.positions || '')} · Lương khoán</div><table><tbody>
+        ${row(`Số tiền khoán <span class="muted small">(${x.amountSource === 'month' ? 'nhập riêng tháng này' : 'số tiền mặc định ở Nhân sự'})</span>`, money(x.amount))}
+        ${row(x.taxed ? `Thuế TNCN vãng lai = ${money(x.amount)} × ${x.taxPct}%` : `Thuế TNCN vãng lai <span class="muted small">(số tiền dưới ngưỡng ${money(x.taxThreshold)} đ: không khấu trừ)</span>`, '−' + money(l.deduction))}
+        ${row('Thực nhận', money(l.net), 1)}</tbody></table>${x.note ? `<div class="muted small" style="margin-top:6px">Nội dung: ${esc(x.note)}</div>` : ''}`); });
   }
   function lineDetail(d, l) {
     const x = l.detail, cn = Object.fromEntries(d.coefTypes.map(c => [c.code, c.name])), ex = k => (x.extras || []).filter(e => e.kind === k);

@@ -8,16 +8,18 @@ const admin = req => req.auth.needAdmin();
 const reresolve = async () => { await resolveEmployees(); await require('../services/payroll').markStale(require('../db').pool); };
 
 router.get('/', api(async () => {
-  const [groups, sheets, departments, sso, counts, unassigned, total] = await Promise.all([
+  const [groups, sheets, departments, sso, counts, unassigned, total, fixedPeople] = await Promise.all([
     rows('SELECT * FROM groups ORDER BY sort_order, name'),
     rows('SELECT * FROM sheets ORDER BY sort_order, name'),
     rows(`SELECT d.*, COALESCE((SELECT json_agg(m.sso_department_id ORDER BY m.sort_order) FROM department_sso_map m WHERE m.department_id=d.id),'[]'::json) AS sso_ids FROM departments d ORDER BY d.sort_order, d.name`),
     rows(`SELECT c.id, c.name, m.department_id FROM sso_departments_cache c LEFT JOIN department_sso_map m ON m.sso_department_id=c.id ORDER BY c.name`),
     rows(`SELECT department_id, count(*)::int AS n FROM v_employees WHERE sso_status='active' AND payroll_active AND department_id IS NOT NULL GROUP BY department_id`),
     one(`SELECT count(*)::int AS n FROM v_employees WHERE sso_status='active' AND payroll_active AND department_id IS NULL`),
-    one(`SELECT count(*)::int AS n FROM employees WHERE sso_status='active'`)]);
+    one(`SELECT count(*)::int AS n FROM employees WHERE sso_status='active'`),
+    rows(`SELECT v.id, v.full_name, v.fixed_group_id, v.payroll_active, COALESCE(v.pay_department_name, CASE WHEN v.sso_user_id LIKE 'manual:%' THEN 'Người ngoài SSO' END) AS department_name
+      FROM v_employees v WHERE v.pay_mode='fixed' AND v.sso_status='active' AND NOT v.excluded ORDER BY v.full_name`)]);
   const cnt = new Map(counts.map(c => [c.department_id, c.n]));
-  return { groups, sheets, departments: departments.map(d => ({ ...d, employee_count: cnt.get(d.id) || 0 })), ssoDepartments: sso, unassignedEmployees: unassigned.n, totalEmployees: total.n };
+  return { groups, sheets, departments: departments.map(d => ({ ...d, employee_count: cnt.get(d.id) || 0 })), ssoDepartments: sso, unassignedEmployees: unassigned.n, totalEmployees: total.n, fixedPeople };
 }));
 
 // Xoá có kiểm tra: chưa có dữ liệu chấm công/lương thì gỡ liên kết con rồi xoá
@@ -35,7 +37,8 @@ router.delete('/groups/:id', api(async req => {
 }));
 crud(router, { path: 'groups', table: 'groups', guard: admin, fields: [
   { k: 'code', required: true, label: 'Mã' }, { k: 'name', required: true, label: 'Tên bảng lương' },
-  { k: 'kind', type: 'enum', values: ['plant', 'office'], label: 'Loại' }, { k: 'signers', type: 'signers', label: 'Người ký' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
+  { k: 'kind', type: 'enum', values: ['plant', 'office'], label: 'Loại' }, { k: 'pay_type', type: 'enum', values: ['coef', 'fixed'], label: 'Loại tính lương' },
+  { k: 'tax_threshold', type: 'num', min: 0, max: 1e11, label: 'Ngưỡng khấu trừ thuế vãng lai' }, { k: 'signers', type: 'signers', label: 'Người ký' }, { k: 'active', type: 'bool' }, { k: 'sort_order', type: 'int' }] });
 crud(router, { path: 'sheets', table: 'sheets', guard: admin, fields: [
   { k: 'code', required: true, label: 'Mã' }, { k: 'name', required: true, label: 'Tên bảng chấm công' },
   { k: 'group_id', type: 'uuid', required: true, label: 'Bảng lương' }, { k: 'signers', type: 'signers', label: 'Người ký' },
@@ -61,7 +64,9 @@ router.put('/groups/:id/sheets', api(async req => {
   admin(req); if (!isUuid(req.params.id)) bad('Mã không hợp lệ');
   const ids = [...new Set(Array.isArray(req.body?.sheetIds) ? req.body.sheetIds : [])]; if (ids.some(i => !isUuid(i))) bad('Bảng chấm công không hợp lệ');
   await tx(async c => {
-    if (!(await c.query('SELECT 1 FROM groups WHERE id=$1', [req.params.id])).rowCount) bad('Không tìm thấy bảng lương', 404);
+    const g = (await c.query('SELECT pay_type FROM groups WHERE id=$1', [req.params.id])).rows[0];
+    if (!g) bad('Không tìm thấy bảng lương', 404);
+    if (g.pay_type === 'fixed' && ids.length) bad('Bảng lương khoán không dùng bảng chấm công. Chọn người ở nút "Chọn người lương khoán".');
     for (const sid of ids) {   // không cho chuyển bảng chấm công đã có dữ liệu sang bảng lương khác nếu bảng lương cũ đã có lương
       const cur = (await c.query('SELECT group_id FROM sheets WHERE id=$1', [sid])).rows[0];
       if (cur && cur.group_id && cur.group_id !== req.params.id && (await c.query('SELECT 1 FROM payroll_runs WHERE group_id=$1 LIMIT 1', [cur.group_id])).rowCount && (await c.query('SELECT 1 FROM periods WHERE sheet_id=$1 LIMIT 1', [sid])).rowCount)
@@ -71,6 +76,21 @@ router.put('/groups/:id/sheets', api(async req => {
     await c.query('UPDATE sheets SET group_id=$1 WHERE id = ANY($2::uuid[])', [req.params.id, ids]);
   });
   await audit(req, 'group.set_sheets', 'groups', req.params.id, { ids }); return { ok: true, count: ids.length };
+}));
+// Chọn NHIỀU người lương khoán cho 1 bảng lương khoán (mỗi người chỉ ở 1 bảng: tick = chuyển sang đây, bỏ tick = gỡ ra khỏi bảng này)
+router.put('/groups/:id/members', api(async req => {
+  if (!req.auth.isAdmin && !req.auth.can('people', {})) bad('Chỉ Admin hoặc người được phân quyền "Quản lý nhân sự" mới thực hiện được', 403);
+  if (!isUuid(req.params.id)) bad('Mã không hợp lệ');
+  const ids = [...new Set(Array.isArray(req.body?.employeeIds) ? req.body.employeeIds : [])]; if (ids.some(i => !isUuid(i))) bad('Nhân sự không hợp lệ');
+  await tx(async c => {
+    const g = (await c.query('SELECT pay_type FROM groups WHERE id=$1', [req.params.id])).rows[0];
+    if (!g) bad('Không tìm thấy bảng lương', 404);
+    if (g.pay_type !== 'fixed') bad('Chỉ bảng lương khoán mới chọn người theo cách này');
+    await c.query(`UPDATE employees SET fixed_group_id=NULL, updated_at=now() WHERE fixed_group_id=$1 AND NOT (id = ANY($2::uuid[]))`, [req.params.id, ids]);
+    await c.query(`UPDATE employees SET fixed_group_id=$1, updated_at=now() WHERE id = ANY($2::uuid[]) AND pay_mode='fixed'`, [req.params.id, ids]);
+  });
+  await require('../services/payroll').markStale(require('../db').pool);
+  await audit(req, 'group.set_members', 'groups', req.params.id, { ids }); return { ok: true, count: ids.length };
 }));
 // Tạo nhanh bộ phận từ các phòng ban/đơn vị SSO chưa liên kết (mỗi mục SSO -> 1 bộ phận, tên giống SSO)
 router.post('/import-sso', api(async req => {

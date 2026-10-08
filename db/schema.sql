@@ -70,6 +70,19 @@ CREATE TABLE IF NOT EXISTS allowance_groups (
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS allowance_group_id uuid REFERENCES allowance_groups(id) ON DELETE SET NULL;
 -- Chức danh sửa tay (tab Nhân sự): ưu tiên hơn chức danh tự động (Trưởng ca / ĐHV / theo SSO)
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS title_manual text;
+-- v6.23: cách tính lương của từng người: 'coef' = theo hệ số (mặc định) | 'fixed' = lương khoán / thù lao (số tiền cố định, khấu trừ thuế vãng lai)
+-- Người lương khoán không vào bảng lương theo hệ số mà vào bảng lương khoán (groups.pay_type='fixed') chọn ở fixed_group_id
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS pay_type text NOT NULL DEFAULT 'coef';
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS tax_threshold numeric(16,2) NOT NULL DEFAULT 2000000;   -- chi từ mức này trở lên mới khấu trừ thuế vãng lai
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS pay_mode text NOT NULL DEFAULT 'coef';
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS fixed_amount numeric(16,2) NOT NULL DEFAULT 0;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS fixed_tax_pct numeric(6,2) NOT NULL DEFAULT 10;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS fixed_group_id uuid REFERENCES groups(id) ON DELETE SET NULL;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='groups_pay_type_chk') THEN ALTER TABLE groups ADD CONSTRAINT groups_pay_type_chk CHECK (pay_type IN ('coef','fixed')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='employees_pay_mode_chk') THEN ALTER TABLE employees ADD CONSTRAINT employees_pay_mode_chk CHECK (pay_mode IN ('coef','fixed')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='employees_fixed_tax_chk') THEN ALTER TABLE employees ADD CONSTRAINT employees_fixed_tax_chk CHECK (fixed_tax_pct >= 0 AND fixed_tax_pct <= 100); END IF;
+END $$;
 ALTER TABLE sheets ADD COLUMN IF NOT EXISTS print_title text;
 ALTER TABLE sheets ADD COLUMN IF NOT EXISTS use_safety boolean NOT NULL DEFAULT false;
 ALTER TABLE sheets ADD COLUMN IF NOT EXISTS use_labor boolean NOT NULL DEFAULT true;
@@ -528,3 +541,11 @@ DO $$ BEGIN
     INSERT INTO settings(key,value,note) VALUES('v622_titles','1','Đổi chức danh nhà máy sang Giám đốc NM / P. Giám đốc NM');
   END IF;
 END $$;
+-- v6.23: số tiền lương khoán nhập riêng cho từng tháng (vd lao động thời vụ mỗi tháng một khác); không có dòng = dùng số tiền mặc định ở Nhân sự
+CREATE TABLE IF NOT EXISTS fixed_pay_months (
+  employee_id uuid NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  year int NOT NULL, month int NOT NULL CHECK (month BETWEEN 1 AND 12),
+  amount numeric(16,2) NOT NULL CHECK (amount >= 0), note text,
+  updated_by text, updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (employee_id, year, month)
+);
