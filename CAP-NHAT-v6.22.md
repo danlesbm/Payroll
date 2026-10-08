@@ -10,3 +10,7 @@ Chức danh in trên bảng chấm công, bảng lương, bảng thưởng, bả
 ## Sửa tay chức danh
 - *Quản trị › Nhân sự*: cột **Chức danh** là ô nhập. Chữ mờ trong ô là chức danh tự động; gõ vào để sửa tay, xoá trắng để về tự động. Bấm **Lưu thay đổi**. Có thể **Hoàn tác** như các cột khác.
 - Đổi chức danh không cần "Tính lại" bảng lương (chức danh lấy lúc xem / xuất).
+
+## Phương án A / B cho tiền làm lễ, làm thêm của ca đêm
+- Công thức đang dùng (B, theo Excel nhà máy) không đổi.
+- Có thêm nhánh dự phòng **`theo-tt`** tính theo phương án A (Thông tư: ca đêm ngày lễ 390%, ca đêm tăng ca 260%). Hai nhánh chỉ khác 1 dòng trong `src/lib/premium-method.js`. Cách cập nhật và chuyển server giữa 2 nhánh: xem `NHANH-THEO-TT.md`.

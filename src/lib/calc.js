@@ -1,5 +1,6 @@
 // Công thức tính lương — hàm thuần, dễ kiểm thử.
 const { payRatio } = require('./workdays');
+const { PREMIUM_METHOD } = require('./premium-method');
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const round = n => Math.round(num(n));
 const ymd = v => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
@@ -104,9 +105,11 @@ function calcLine(i) {
   // Căn cứ tính làm đêm / làm thêm / lễ phần lương = lương BH (đủ công, đã nhân xếp loại) + phụ cấp (gồm phụ cấp an toàn)
   const premBaseS = insCoef * num(i.baseWage) * lf + allowance;
   const pd = i.premiumDays || {}, pdB = i.premiumDaysBonus || pd;
-  // Làm thêm (công vượt chuẩn) và làm lễ tính trên đơn giá ngày ĐÃ GỒM tiền làm đêm bình quân của tháng (như bảng Excel nhà máy):
-  // (lương + thưởng + phụ cấp + tiền làm đêm) ÷ công chuẩn × số công × % → hệ số (1 + công đêm tương đương ÷ công chuẩn)
-  const nfS = div > 0 ? 1 + num(pd.night) / div : 1, nfB = div > 0 ? 1 + num(pdB.night) / div : 1;
+  // Phương án B (Excel nhà máy): làm thêm (công vượt chuẩn) và làm lễ tính trên đơn giá ngày ĐÃ GỒM tiền làm đêm bình quân của tháng:
+  // (lương + thưởng + phụ cấp + tiền làm đêm) ÷ công chuẩn × số công × % → hệ số (1 + công đêm tương đương ÷ công chuẩn).
+  // Phương án A (Thông tư): hệ số = 1, phần đêm × % lễ / tăng ca đã nằm trong premiumDays. Xem src/lib/premium-method.js.
+  const premiumMethod = i.premiumMethod || PREMIUM_METHOD, methodA = premiumMethod === 'A';
+  const nfS = !methodA && div > 0 ? 1 + num(pd.night) / div : 1, nfB = !methodA && div > 0 ? 1 + num(pdB.night) / div : 1;
   const otSalaryAmt = round(premBaseS * overS * nfS), otBonusAmt = round(bonusCoef * num(i.unitPrice) * overB * lf * pf * nfB);
   const bonusBase = round(bonusCoef * num(i.unitPrice) * mainB * lf * pf);
   // Công làm đêm / làm thêm (sửa chữa…) / làm ngày lễ: số "ngày tương đương" nhân đơn giá ngày (áp dụng cả lương và thưởng)
@@ -146,7 +149,7 @@ function calcLine(i) {
   const salaryNet = insuranceSalary + salaryPremium + allowance - deduction;        // lương thực lĩnh (bảng lương)
   const bonusNet = bonus + bonusPremium - bonusDeduction;                           // thưởng thực nhận (bảng thưởng)
   const net = salaryNet + bonusNet + (i.mealInNet === false ? 0 : meal);
-  return { ratio: Math.round(ratio * 10000) / 10000, ratioBonus: Math.round(ratioBonus * 10000) / 10000, payStatus: pr.status, otDays: pr.otDays, rateDiv: div, minDays: minD, standardDays: std, dailySalary, dailyBonus, nightSalary: outS.night, nightBonus: outB.night, extraSalary: outS.extra, extraBonus: outB.extra, holidaySalary: outS.holiday, holidayBonus: outB.holiday, premiumInBonus: toBonus, premSal, premBon, otSalaryAmt, otBonusAmt, salaryPremium, bonusPremium, premiumDays: { night: num(pd.night), extra: num(pd.extra), holiday: num(pd.holiday) }, laborFactor: lf, planFactor: pf, insuranceFull, insuranceBase, premBaseSalary: round(premBaseS), safetyFactor: sf, safetyAllowance, safetyBase, insCoef, bonusCoef, insuranceSalary, bonusBase, bonus, allowance, meal,
+  return { ratio: Math.round(ratio * 10000) / 10000, ratioBonus: Math.round(ratioBonus * 10000) / 10000, payStatus: pr.status, otDays: pr.otDays, rateDiv: div, minDays: minD, standardDays: std, dailySalary, dailyBonus, nightSalary: outS.night, nightBonus: outB.night, extraSalary: outS.extra, extraBonus: outB.extra, holidaySalary: outS.holiday, holidayBonus: outB.holiday, premiumInBonus: toBonus, premiumMethod, premSal, premBon, otSalaryAmt, otBonusAmt, salaryPremium, bonusPremium, premiumDays: { night: num(pd.night), extra: num(pd.extra), holiday: num(pd.holiday) }, laborFactor: lf, planFactor: pf, insuranceFull, insuranceBase, premBaseSalary: round(premBaseS), safetyFactor: sf, safetyAllowance, safetyBase, insCoef, bonusCoef, insuranceSalary, bonusBase, bonus, allowance, meal,
     periodicDeduction: periodic, monthlyDeduction, monthlyBonus, bonusDeduction, salaryNet, bonusNet, deduction, net, deductionDetail, extraDetail };
 }
 module.exports = { bonusCoefOf, pickBaseWage, pickCodeMealPrice, pickCodeMealPriceAt, mealByCode, round, num, pickEffective, pickUnitPrice, pickMealRate, workDays, autoMealQty, mealAmount, calcLine };
