@@ -411,17 +411,17 @@ test('khớp bảng Excel NMTĐ Suối Sập 3 tháng 9/2026 (Hồ Đăng Thành
   assert.ok(Math.abs(r.holidaySalary + r.holidayBonus - (S + T) * 2 * 2 / 22) <= 2); // Excel 3.134.581
 });
 
-test('phương án A (Thông tư, nhánh theo-tt): phụ cấp đêm nhân % lễ / % tăng ca theo từng ca', () => {
+test('phương án A (NĐ 145/2020 Điều 57): ca đêm ngày lễ / vượt chuẩn thêm 20% đơn giá ban ngày của công đó', () => {
   const W = require('../src/lib/workdays');
   const work = { K1: { value: 1, night: 0 }, DEM: { value: 1, night: 1 }, SC: { value: 1, night: 0 }, 'K1,3': { value: 2, night: 1 } };
   const kind = { DEM: 'night', SC: 'extra', 'K1,3': 'night' }, pctTab = { DEM: 130, SC: 135, 'K1,3': 130 };
   const o = { work, kind, pct: c => pctTab[c] ?? 100, holPct: d => (d === 1 ? 400 : 100), method: 'A' };
-  // ca đêm ngày lễ 400%: 520% = 1 (lương) + 0,3 (đêm) + 3,9 (lễ)
-  assert.deepEqual(W.premiumDays([{ day: 1, code: 'DEM' }], o), { night: 0.3, extra: 0, holiday: 3.9 });
-  // K1,3 ngày lễ 300%: lễ 2 (ca ngày) + 2,6 (ca đêm 390% − 100% − 30%) = 4,6
+  // ca đêm ngày lễ 400%: 510% = 1 (lương) + 0,3 (đêm) + 3 (lễ) + 0,8 (20% × 400%)
+  assert.deepEqual(W.premiumDays([{ day: 1, code: 'DEM' }], o), { night: 0.3, extra: 0, holiday: 3.8 });
+  // K1,3 ngày lễ 300%: lễ 2 (ca ngày) + 2 (ca đêm) + 0,6 (20% × 300%) = 4,6 → ca đêm 390%
   assert.deepEqual(W.premiumDays([{ day: 1, code: 'K1,3' }], { ...o, holPct: d => (d === 1 ? 300 : 100) }), { night: 0.3, extra: 0, holiday: 4.6 });
-  // K1,3 vượt công chuẩn, tăng ca ×2: ca đêm 260% = 200% (tiền tăng ca) + 30% đêm + 30% làm thêm
-  assert.deepEqual(W.premiumDays([{ day: 2, code: 'K1' }, { day: 3, code: 'K1,3' }], { ...o, std: 1, otMult: 2 }), { night: 0.3, extra: 0.3, holiday: 0 });
+  // K1,3 vượt công chuẩn, tăng ca ×2: ca đêm 270% = 200% (tiền tăng ca) + 30% đêm + 40% (20% × 200%)
+  assert.deepEqual(W.premiumDays([{ day: 2, code: 'K1' }, { day: 3, code: 'K1,3' }], { ...o, std: 1, otMult: 2 }), { night: 0.3, extra: 0.4, holiday: 0 });
   // sửa chữa: như phương án B
   assert.deepEqual(W.premiumDays([{ day: 1, code: 'SC' }], o), { night: 0, extra: 0.35, holiday: 4.05 });
   // calcLine A: tiền lễ / tăng ca KHÔNG nhân hệ số tiền đêm bình quân
